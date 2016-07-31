@@ -1,0 +1,28 @@
+[Base para nomes de arquivos]
+water
+[Temperatura (K)]
+298.15
+[Distância de corte (Å)]
+9.0
+[Alpha (1/Å) e Damping]
+0.0 none
+[Semente para geração de números aleatórios]
+23454
+[Passo de integração (fs)]
+1.0
+[Número de termostatos e número de loops]
+3 1 1
+[Parâmetro de tempo da cadeia de termostatos (fs)]
+200.0
+[Distância extra para lista de vizinhos (Å)]
+2
+[Intervalo para gravação de configurações (fs)]
+1000000
+[Intervalo para gravação de propriedades (fs)]
+50
+[Tempo total de equilibração e produção (fs)]
+100 0
+[Ensemble]
+nve 
+
+
