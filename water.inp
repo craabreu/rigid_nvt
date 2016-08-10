@@ -4,25 +4,18 @@ water
 298.15
 [Distância de corte (Å)]
 9.0
-[Alpha (1/Å) e Damping]
-0.0 none
 [Semente para geração de números aleatórios]
 2345
 [Passo de integração (fs)]
-1.0
-[Número de termostatos e número de loops]
-3 1 1
-[Parâmetro de tempo da cadeia de termostatos (fs)]
-200.0
+3.0
+[Número de passos de MD por passo de MC]
+10
 [Distância extra para lista de vizinhos (Å)]
 2
-[Intervalo para gravação de configurações (fs)]
+[Intervalo para gravação de configurações]
 1000000
-[Intervalo para gravação de propriedades (fs)]
+[Intervalo para gravação de propriedades]
 50
-[Tempo total de equilibração e produção (fs)]
-500 0
-[Ensemble]
-nve 
-
+[Passos de equilibração e de produção]
+1000 100
 

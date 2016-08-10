@@ -1,8 +1,8 @@
 common/*.mod
 common/*.o
 common/*.a
-md_lj_coul
-md_lj
+hmc_lj_coul
+hmc_lj
 *.log
 *.xyz
 *_out.lmp

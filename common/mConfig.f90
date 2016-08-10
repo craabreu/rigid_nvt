@@ -252,30 +252,45 @@ contains
     call tConfig_Save_XYZ_to_unit( me, out )
     close(out)
   end subroutine tConfig_Save_XYZ_to_file
+
   !=================================================================================================
 
   subroutine tConfig_Save_XYZ_to_unit( me, unit )
     class(tConfig), intent(inout) :: me
     integer,        intent(in)    :: unit
-    integer  :: i, m
-    real(rb) :: xi, yi, zi
+    integer  :: i, m, nmol, imol
+    real(rb) :: imass, ri(3), L(3), Lmin(3)
+    real(rb), allocatable :: rcm(:,:), molMass(:)
     character(sl) :: itype
     write(unit,*) me % natoms
     write(unit,*)
+    nmol = maxval(me%mol)
+    allocate( rcm(3,nmol), molMass(nmol) )
+    rcm = 0.0_rb
+    molMass = 0.0_rb
+    do i = 1, me%natoms
+      imol = me%mol(i)
+      imass = me%mass(me%Type(i))
+      molMass(imol) = molMass(imol) + imass
+      rcm(:,imol) = rcm(:,imol) + imass*me%R(:,i)
+    end do
+    forall (imol=1:nmol) rcm(:,imol) = rcm(:,imol)/molMass(imol)
+    L = [me%Lx, me%Ly, me%Lz]
+    Lmin = [me%xmin, me%ymin, me%zmin]
+    do imol = 1, nmol
+      ri = rcm(:,imol)/L
+      rcm(:,imol) = L*(ri - floor(ri))
+    end do
     do i = 1, me % natoms
-      xi = (me%Rx(i) - me%xmin)/me%Lx
-      yi = (me%Ry(i) - me%ymin)/me%Ly
-      zi = (me%Rz(i) - me%zmin)/me%Lz
-      xi = me%xmin + me%Lx*(xi - floor(xi))
-      yi = me%ymin + me%Ly*(yi - floor(yi))
-      zi = me%zmin + me%Lz*(zi - floor(zi))
+      imol = me%mol(i)
+      ri = me%R(:,i) - L*anint((me%R(:,i) - rcm(:,imol))/L)
       m = nint(me%Mass(me%Type(i)))
       if (any(atomic_mass == m)) then
         itype = element(maxloc(transfer(atomic_mass == m, atomic_mass),dim=1))
       else
         itype = int2str(me%Type(i))
       end if
-      write(unit,*) trim(itype), xi, yi, zi
+      write(unit,*) trim(itype), ri
     end do
   end subroutine tConfig_Save_XYZ_to_unit
 

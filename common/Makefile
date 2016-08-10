@@ -1,6 +1,6 @@
 FORT = gfortran
 FLAGS = -march=native -ffast-math -funroll-loops -fstrict-aliasing -O3 -Wunused -cpp
-SRCS = mGlobal.f90 mRandom.f90 mConfig.f90 mRigidBody.f90 mMath.f90 mThermostat.f90 EmDee.f90
+SRCS = mGlobal.f90 mRandom.f90 mConfig.f90 EmDee.f90
 OBJS = $(SRCS:%.f90=%.o)
 LIBFILE = libmscommon.a
 NSY=1
@@ -16,15 +16,6 @@ EmDee.o: EmDee.f90
 	$(FORT) $(FLAGS) -c -o $@ $<
 
 mRandom.o: mRandom.f90
-	$(FORT) $(FLAGS) -c -o $@ $<
-
-mThermostat.o: mThermostat.f90 mGlobal.o
-	$(FORT) $(FLAGS) -c -o $@ $<
-
-mRigidBody.o: mRigidBody.f90 mConfig.o mMath.o mGlobal.o
-	$(FORT) $(FLAGS) -Dnsy=$(NSY) -c -o $@ $<
-
-mMath.o: mMath.f90 mGlobal.o
 	$(FORT) $(FLAGS) -c -o $@ $<
 
 mConfig.o: mConfig.f90 mGlobal.o
