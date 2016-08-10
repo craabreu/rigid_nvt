@@ -10,7 +10,7 @@ integer,   parameter :: atomic_mass(5) = [1,12,14,16,32]
 type tConfig
 
   real(rb) :: xmin, xmax, ymin, ymax, zmin, zmax
-  real(rb) :: Lx, Ly, Lz
+  real(rb), pointer :: Lx, Ly, Lz
 
   integer  :: ntypes
   real(rb), allocatable :: epsilon(:), sigma(:)
@@ -19,12 +19,12 @@ type tConfig
   integer,  pointer :: Mol(:), Type(:)
   real(rb), pointer :: Charge(:)
 
-  real(rb), pointer :: R(:,:), F(:,:)
+  real(rb), pointer :: R(:,:), F(:,:), P(:,:)
 
   real(rb), pointer :: mass(:)
   real(rb), pointer :: Rx(:), Ry(:), Rz(:) ! Positions
   real(rb), pointer :: Fx(:), Fy(:), Fz(:) ! Forces
-  real(rb), allocatable :: Px(:), Py(:), Pz(:) ! Linear momenta
+  real(rb), pointer :: Px(:), Py(:), Pz(:) ! Linear momenta
   real(rb), allocatable :: InvMass(:)
 
   logical :: velocity_input = .false.
@@ -67,16 +67,19 @@ contains
       else if ((narg == 4).and.(join(arg(3:4)) == "xlo xhi")) then
         me % xmin = str2real(arg(1))
         me % xmax = str2real(arg(2))
+        allocate( me % Lx )
         me % Lx = me % xmax - me % xmin
 
       else if ((narg == 4).and.(join(arg(3:4)) == "ylo yhi")) then
         me % ymin = str2real(arg(1))
         me % ymax = str2real(arg(2))
+        allocate( me % Ly )
         me % Ly = me % ymax - me % ymin
 
       else if ((narg == 4).and.(join(arg(3:4)) == "zlo zhi")) then
         me % zmin = str2real(arg(1))
         me % zmax = str2real(arg(2))
+        allocate( me % Lz )
         me % Lz = me % zmax - me % zmin
 
       else if ((narg == 1).and.(arg(1) == "Masses")) then
@@ -98,18 +101,20 @@ contains
         associate( N => me % natoms )
           allocate( me%Mol(N), me%Type(N), me%Charge(N) )
 
-          allocate( me%R(3,N), me%F(3,N) )
+          allocate( me%R(3,N), me%F(3,N), me%P(3,N) )
           me%Rx => me%R(1,:)
           me%Ry => me%R(2,:)
           me%Rz => me%R(3,:)
           me%Fx => me%F(1,:)
           me%Fy => me%F(2,:)
           me%Fz => me%F(3,:)
+          me%Px => me%P(1,:)
+          me%Py => me%P(2,:)
+          me%Pz => me%P(3,:)
 
 !          allocate( me%Rx(N), me%Ry(N), me%Rz(N) )
 !          allocate( me%Fx(N), me%Fy(N), me%Fz(N) )
-
-          allocate( me%Px(N), me%Py(N), me%Pz(N) )
+!          allocate( me%Px(N), me%Py(N), me%Pz(N) )
           allocate( me%InvMass(N) )
         end associate
         do k = 1, me % natoms

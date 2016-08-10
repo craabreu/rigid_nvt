@@ -7,7 +7,7 @@ water
 [Alpha (1/Å) e Damping]
 0.0 none
 [Semente para geração de números aleatórios]
-23454
+2345
 [Passo de integração (fs)]
 1.0
 [Número de termostatos e número de loops]
@@ -21,7 +21,7 @@ water
 [Intervalo para gravação de propriedades (fs)]
 50
 [Tempo total de equilibração e produção (fs)]
-100 0
+500 0
 [Ensemble]
 nve 
 

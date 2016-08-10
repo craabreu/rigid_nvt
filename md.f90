@@ -1,12 +1,9 @@
 program lj_md_nve
 
 use mGlobal
-use mRandom
 use mConfig
 use mThermostat
-use mRigidBody
 use EmDee
-use omp_lib
 
 implicit none
 
@@ -20,29 +17,23 @@ character(sl) :: Base
 integer :: i, j, N, seed, Nchain, Nloop, Nsy
 real(rb) :: T, Rc, dt, skin, tdamp, tconf, thermo, tequil, tprod
 character(3) :: ensemble
-logical :: nvt = .false.
 
 ! System properties:
-real(rb) :: Lx, Ly, Lz, Volume, PE, KE, Virial
-integer :: NB, dof
-integer, allocatable :: first(:), last(:)
-type(tRigidBody), allocatable :: body(:)
+real(rb) :: Lx, Ly, Lz, Volume
+integer :: dof
 
 ! Other variables:
 integer  :: step, Nconf, Nprop, Nequil, Nprod
-logical  :: Compute
 real(rb) :: InvLx, InvLy, InvLz
 real(rb) :: Rc2, half_dt, KE_sp
 real(rb) :: Acc_Press = zero
-real(rb) :: total_time
-type(shr3) :: random
 type(nhc_rev) :: NHC
 
 integer :: argcount, threads
 character(256) :: line
 integer, allocatable, target :: indexes(:)
 type(tEmDee), target :: md
-type(c_ptr) :: system, forces, coords
+type(c_ptr) :: system
 type(EmDee_Model), pointer :: model(:)
 
 ! Executable code:
@@ -65,17 +56,17 @@ else
   stop
 end if
 
-total_time = omp_get_wtime()
 call Read_Specifications( line )
 
 call init_log( trim(Base)//".log" )
 call Config % Read( trim(Base)//".lmp" )
 call Setup_Simulation
 
-md = EmDee_system( threads, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
+md = EmDee_system( threads, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass), seed )
 system = c_loc(md)
-forces = c_loc(Config%F)
-coords = c_loc(Config%R)
+md%forces = c_loc(Config%F)
+md%coords = c_loc(Config%R)
+md%momenta = c_loc(Config%P)
 
 allocate( model(Config%ntypes) )
 do i = 1, Config%ntypes
@@ -89,55 +80,47 @@ do i = 1, Config%ntypes
 end do
 do i = 1, maxval(Config%Mol)
   indexes = pack( [(j,j=1,N)], Config%Mol == i )
-  call EmDee_add_rigid_body( system, size(indexes), c_loc(indexes), c_loc(Config%R), Config%Lx )
+  call EmDee_add_rigid_body( system, c_loc(indexes), size(indexes) )
 end do
 #ifdef coul
   call EmDee_set_charges( system, c_loc(Config%Charge) )
 #endif
+call EmDee_upload( system, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr )
+call EmDee_random_momenta( system, kB*T, 1 )
 
-call Identify_Rigid_Bodies( NB )
-call Assign_Momenta
-call writeln( "Ensemble: ", ensemble )
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
 call NHC % Setup( Nchain, kB*T, tdamp, dof, dt, loop = Nloop, nsy = Nsy )
 
-Compute = .true.
-call Compute_Forces
-KE = sum(body%kinetic_energy())
+call EmDee_compute( system )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press H_nhc" )
 step = 0
 call writeln( properties() )
 do step = 1, NEquil
-  Compute = mod(step,Nprop) == 0
   call Verlet_Step
-  if (Compute) call writeln( properties() )
+  if (mod(step,Nprop) == 0) call writeln( properties() )
 end do
 
 Acc_Press = zero
-Compute = .true.
-call Compute_Forces
+call EmDee_compute( system )
 call writeln( )
 call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press H_nhc" )
 step = 0
 call writeln( properties() )
 do step = NEquil+1, NEquil+NProd
-  Compute = mod(step,Nprop) == 0
   call Verlet_Step
   if (mod(step,Nconf)==0) call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
-  if (Compute) call writeln( properties() )
+  if (mod(step,Nprop) == 0) call writeln( properties() )
 end do
 
-total_time = omp_get_wtime() - total_time
-call writeln( "Loop time of", real2str(total_time), "s." )
+call writeln( "Loop time of", real2str(md%totalTime), "s." )
 call writeln()
-call writeln( "Pair time  =", real2str(md%time), "s." )
-call writeln( "Other time =", real2str(total_time-md%time), "s." )
+call writeln( "Pair time  =", real2str(md%pairTime), "s." )
+call writeln( "Other time =", real2str(md%totalTime-md%pairTime), "s." )
 call writeln()
 call writeln( "Neighbor list builds =", int2str(md%builds) )
 
-call Get_Momenta
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
@@ -145,18 +128,18 @@ contains
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
     real(rb) :: Temp
-    Temp = (KE/KE_sp)*T
-    Acc_Press = Acc_Press + Pconv*(NB*kB*Temp + Virial)/Volume
+    Temp = (md%Kinetic/KE_sp)*T
+    Acc_Press = Acc_Press + Pconv*(md%nbodies*kB*Temp + md%Virial)/Volume
 
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
-                                 mvv2e*KE, &
-                                 mvv2e*sum(body%translational_energy()), &
-                                 mvv2e*sum(body%rotational_energy()), &
-                                 mvv2e*PE, &
-                                 mvv2e*(PE + KE), &
-                                 Pconv*((NB-1)*kB*Temp + Virial)/Volume, &
-                                 mvv2e*(PE + KE + NHC % energy()) ]))
+                                 mvv2e*md%Kinetic, &
+                                 mvv2e*(md%Kinetic - md%Rotational), &
+                                 mvv2e*md%Rotational, &
+                                 mvv2e*md%Potential, &
+                                 mvv2e*(md%Potential + md%Kinetic), &
+                                 Pconv*((md%nbodies-1)*kB*Temp + md%Virial)/Volume, &
+                                 mvv2e*(md%Potential + md%Kinetic + NHC % energy()) ]))
   end function properties
   !-------------------------------------------------------------------------------------------------
   subroutine Read_Specifications( file )
@@ -214,9 +197,7 @@ contains
     InvLz = 1.0_rb/Lz
     Rc2 = Rc**2
     half_dt = half*dt
-    NB = maxval(Config%Mol)
-    nvt = ensemble == "nvt"
-    dof = 6*NB - 3
+    dof = 6*maxval(Config%Mol) - 3
     KE_sp = half*dof*kB*T
     Volume = Lx*Ly*Lz
     Nconf = nint(tconf/dt)
@@ -225,119 +206,11 @@ contains
     Nprod = nint(tprod/dt)
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
-  subroutine Identify_Rigid_Bodies( NB )
-    integer, intent(in) :: NB
-    integer :: i, j, k
-    real(rb) :: Rijx, Rijy, Rijz
-    allocate( first(NB), last(NB), body(NB) )
-    first = 0
-    do i = 1, N
-      j = Config%Mol(i)
-      if (first(j) == 0) first(j) = i
-      last(j) = i
-    end do
-    do k = 1, NB
-      i = first(k)
-      do j = i+1, last(k)
-        Rijx = Config%Rx(i) - Config%Rx(j)
-        Rijy = Config%Ry(i) - Config%Ry(j)
-        Rijz = Config%Rz(i) - Config%Rz(j)
-        Rijx = Rijx - Lx*nint(InvLx*Rijx)
-        Rijy = Rijy - Ly*nint(InvLx*Rijy)
-        Rijz = Rijz - Lz*nint(InvLx*Rijz)
-        Config%Rx(j) = Config%Rx(i) - Rijx
-        Config%Ry(j) = Config%Ry(i) - Rijy
-        Config%Rz(j) = Config%Rz(i) - Rijz
-      end do
-      j = last(k)
-      call body(k) % setup( Config%Mass(Config%Type(i:j)), Config%Rx(i:j), Config%Ry(i:j), Config%Rz(i:j) )
-    end do
-    if (maxval(body%maximum_distance()) + two*Rc > min(Lx,Ly,Lz)) then
-      call warning( "minimum image convention holds for atoms, but not for molecules" )
-      call warning( "pressure computation might be incorrect" )
-    end if
-  end subroutine Identify_Rigid_Bodies
-  !-------------------------------------------------------------------------------------------------
-  subroutine Assign_Momenta
-    integer  :: i, p1, pN
-    real(rb) :: kBT, P(3), Mass
-    if (Config % velocity_input) then
-      do i = 1, NB
-        p1 = first(i)
-        pN = last(i)
-        call body(i)%set_momenta( Config%Px(p1:pN), Config%Py(p1:pN), Config%Pz(p1:pN) )
-      end do
-    else
-      call random%setup( seed )
-      kBT = kB*T
-      do i = 1, NB
-        call body(i) % assign_momenta( kBT, random, rotation = .false. )
-      end do
-    end if
-    P = [sum(body%Pcm(1)),sum(body%Pcm(2)),sum(body%Pcm(3))]
-    Mass = sum(body%Mass)
-    do i = 1, NB
-      body(i)%Pcm = body(i)%Pcm - (body(i)%Mass/Mass)*P
-    end do
-    KE = sum(body%kinetic_energy())
-  end subroutine Assign_Momenta
-  !-------------------------------------------------------------------------------------------------
-  subroutine Get_Momenta
-    integer :: i, p1, pN
-    do i = 1, NB
-      p1 = first(i)
-      pN = last(i)
-      call body(i)%get_momenta( Config%Px(p1:pN), Config%Py(p1:pN), Config%Pz(p1:pN) )
-    end do
-  end subroutine Get_Momenta
-  !-------------------------------------------------------------------------------------------------
-  subroutine Compute_Forces
-    integer  :: i, k, p1, pN
-    real(rb) :: W
-    call EmDee_compute( system, forces, coords, Config%Lx )
-    if (Compute) then
-      PE = md%Energy
-      W = zero
-      k = 0
-      do i = 1, NB
-        do j = 1, body(i)%NP
-          k = k + 1
-          W = W + sum(body(i)%delta(:,j)*Config%F(:,k))
-        end do
-      end do
-      Virial = md%Virial - third*W
-    end if
-    do i = 1, NB
-      p1 = first(i)
-      pN = last(i)
-      call body(i) % force_and_torque( Config%Fx(p1:pN), Config%Fy(p1:pN), Config%Fz(p1:pN) )
-    end do
-  end subroutine Compute_Forces
-  !-------------------------------------------------------------------------------------------------
   subroutine Verlet_Step
-    integer :: i, p1, pN
-    if (nvt) then
-      call NHC % integrate( body )
-      call NHC % integrate_momenta( body,half_dt )
-    else   
-     call body % boost( half_dt )
-    end if
-    call body % rotate( dt )
-    call body % displace( dt )
-    do i = 1, NB
-      p1 = first(i)
-      pN = last(i)
-      call body(i)%get_positions( Config%Rx(p1:pN), Config%Ry(p1:pN), Config%Rz(p1:pN) )
-    end do
-    call Compute_Forces
-    if (nvt) then
-      call NHC % integrate_momenta( body,half_dt )
-      call NHC % integrate( body )      
-    else   
-     call body % boost( half_dt )
-    end if
-    if (compute) KE = sum(body%kinetic_energy())
-    call Get_Momenta
+    call EmDee_boost( system, half_dt )
+    call EmDee_move( system, dt )
+    call EmDee_compute( system )
+    call EmDee_boost( system, half_dt )
   end subroutine Verlet_Step
   !-------------------------------------------------------------------------------------------------
 end program lj_md_nve
