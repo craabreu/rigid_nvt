@@ -159,9 +159,9 @@ interface
     integer(ib), value :: N
   end subroutine EmDee_add_rigid_body
 
-  subroutine EmDee_upload( md, L, coords, momenta ) bind(C,name="EmDee_upload")
+  subroutine EmDee_upload( md, L, coords, momenta, forces ) bind(C,name="EmDee_upload")
     import :: c_ptr
-    type(c_ptr), value :: md, L, coords, momenta
+    type(c_ptr), value :: md, L, coords, momenta, forces
   end subroutine EmDee_upload
 
   subroutine EmDee_download( md, L, coords, momenta, forces ) bind(C,name="EmDee_download")

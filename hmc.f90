@@ -22,7 +22,7 @@ integer  :: dof
 real(rb) :: Volume
 
 ! Other variables:
-integer  :: step
+integer  :: step, nReject
 real(rb) :: half_dt, KE_sp, kT
 real(rb) :: Acc_Press = zero
 character(256) :: filename
@@ -67,7 +67,7 @@ end do
 #ifdef coul
   call EmDee_set_charges( system, c_loc(Config%Charge) )
 #endif
-call EmDee_upload( system, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr )
+call EmDee_upload( system, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
 call EmDee_random_momenta( system, kT, 1 )
 
 call Config % Save_XYZ( trim(Base)//".xyz" )
@@ -76,12 +76,13 @@ call EmDee_compute( system )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press" )
 step = 0
 call writeln( properties() )
+nReject = 0
 do step = 1, NEquil
   call Monte_Carlo_Step
 !  call Verlet_Step
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
-call Report_Times()
+call Report( NEquil )
 
 Acc_Press = zero
 call EmDee_compute( system )
@@ -90,6 +91,7 @@ call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press" )
 step = NEquil
 call writeln( properties() )
+nReject = 0
 do step = NEquil+1, NEquil+NProd
   call Monte_Carlo_Step
 !  call Verlet_Step
@@ -99,21 +101,24 @@ do step = NEquil+1, NEquil+NProd
   end if
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
-call Report_Times()
+call Report( NProd )
 
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
 contains
   !-------------------------------------------------------------------------------------------------
-  subroutine Report_Times
+  subroutine Report( Ntotal )
+    integer, intent(in) :: Ntotal
     call writeln( "Loop time of", real2str(md%totalTime), "s." )
     call writeln()
     call writeln( "Pair time  =", real2str(md%pairTime), "s." )
     call writeln( "Other time =", real2str(md%totalTime-md%pairTime), "s." )
     call writeln()
     call writeln( "Neighbor list builds =", int2str(md%builds) )
-  end subroutine Report_Times
+    call writeln( )
+    call writeln( "Acceptance ratio = ", real2str(one-real(nReject,rb)/Ntotal) )
+  end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
     real(rb) :: Temp
@@ -205,11 +210,12 @@ contains
   !-------------------------------------------------------------------------------------------------
   subroutine Monte_Carlo_Step
     integer :: step
-    real(rb) :: DeltaE
-    real(rb), target :: Rsave(3,N)
-
-    call EmDee_download( system, c_null_ptr, c_loc(Rsave), c_null_ptr, c_null_ptr )
-    call EmDee_random_momenta( system, kB*T, 0 )
+    real(rb) :: DeltaE, Potential, Virial
+    real(rb), target :: Rsave(3,N), Fsave(3,N)
+    call EmDee_download( system, c_null_ptr, c_loc(Rsave), c_null_ptr, c_loc(Fsave) )
+    Potential = md%Potential
+    Virial = md%Virial
+    call EmDee_random_momenta( system, kT, 0 )
     DeltaE = md%Potential + md%Kinetic
     do step = 1, MDsteps
       call Verlet_Step
@@ -217,8 +223,10 @@ contains
     DeltaE = md%Potential + md%Kinetic - DeltaE
     if (DeltaE >= zero) then
       if (random % uniform() > exp(-DeltaE/kT)) then
-        call EmDee_upload( system, c_null_ptr, c_loc(Rsave), c_null_ptr )
-        call EmDee_compute( system )
+        call EmDee_upload( system, c_null_ptr, c_loc(Rsave), c_null_ptr, c_loc(Fsave) )
+        md%Potential = Potential
+        md%Virial = Virial
+        nReject = nReject + 1
       end if
     end if
   end subroutine Monte_Carlo_Step
