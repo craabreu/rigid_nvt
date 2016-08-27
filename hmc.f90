@@ -62,7 +62,7 @@ do i = 1, Config%ntypes
 end do
 do i = 1, maxval(Config%Mol)
   indexes = pack( [(j,j=1,N)], Config%Mol == i )
-  call EmDee_add_rigid_body( system, c_loc(indexes), size(indexes) )
+  call EmDee_add_rigid_body( system, size(indexes), c_loc(indexes) )
 end do
 #ifdef coul
   call EmDee_set_charges( system, c_loc(Config%Charge) )
@@ -72,14 +72,24 @@ call EmDee_random_momenta( system, kT, 1 )
 
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
-call EmDee_compute( system )
+!call EmDee_compute( system )
+
+!block
+!  integer, target :: atoms(5)
+!  real(rb) :: E
+!  atoms = [1,10,19,45,109]
+!  E = EmDee_subset_energy( system, 5, c_loc(atoms), 0 )
+!  print*, E
+!  stop
+!end block
+
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press" )
 step = 0
 call writeln( properties() )
 nReject = 0
 do step = 1, NEquil
-  call Monte_Carlo_Step
-!  call Verlet_Step
+!  call Monte_Carlo_Step
+  call Verlet_Step
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
 call Report( NEquil )
@@ -93,8 +103,8 @@ step = NEquil
 call writeln( properties() )
 nReject = 0
 do step = NEquil+1, NEquil+NProd
-  call Monte_Carlo_Step
-!  call Verlet_Step
+!  call Monte_Carlo_Step
+  call Verlet_Step
   if (mod(step,Nconf)==0) then
     call EmDee_download( system, c_null_ptr, c_loc(Config%R), c_null_ptr, c_null_ptr )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
@@ -202,10 +212,9 @@ contains
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
   subroutine Verlet_Step
-    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt )
+    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt, 1, 1 )
     call EmDee_move( system, 1.0_rb, 0.0_rb, dt )
-    call EmDee_compute( system )
-    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt )
+    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt, 1, 1 )
   end subroutine Verlet_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Monte_Carlo_Step

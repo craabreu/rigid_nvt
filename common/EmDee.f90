@@ -25,15 +25,13 @@ implicit none
 
 integer, parameter, private :: ib = c_int, rb = c_double
 
-type, bind(C) :: EmDee_Model
-  integer(ib) :: id = 0
-  type(c_ptr) :: data = c_null_ptr
-  real(rb)    :: p1 = 0.0_rb
-  real(rb)    :: p2 = 0.0_rb
-  real(rb)    :: p3 = 0.0_rb
-  real(rb)    :: p4 = 0.0_rb
-  integer(ib) :: external = 1
-end type EmDee_Model
+type, bind(C) :: EmDee_model
+  integer(ib) :: id
+  type(c_ptr) :: data
+  real(rb)    :: p1, p2, p3, p4
+  integer(ib) :: external
+  type(c_ptr) :: next
+end type EmDee_model
 
 type, bind(C) :: tEmDee
 
@@ -71,6 +69,8 @@ type, bind(C) :: tEmDee
   integer(ib) :: maxatoms       ! Maximum number of atoms in a cell
   integer(ib) :: maxpairs       ! Maximum number of pairs formed by all atoms of a cell
   type(c_ptr) :: cell           ! Array containing all neighbor cells of each cell
+  type(c_ptr) :: cellAtom       ! List of atoms belonging to each cell
+  type(c_ptr) :: atomCell       ! Array containing the current cell of each atom
 
   integer(ib) :: natoms         ! Number of atoms in the system
   type(c_ptr) :: atomType       ! Pointer to the type indexes of all atoms
@@ -95,7 +95,6 @@ type, bind(C) :: tEmDee
   integer(ib) :: nthreads       ! Number of parallel openmp threads
   integer(ib) :: threadAtoms    ! Number of atoms per parallel thread
   integer(ib) :: threadBodies   ! Number of rigid bodies per parallel thread
-  type(c_ptr) :: cellAtom       ! List of atoms belonging to each cell
   type(c_ptr) :: threadCell     ! List of cells to be dealt with in each parallel thread
   type(c_ptr) :: neighbor       ! Pointer to neighbor lists
   type(c_ptr) :: excluded       ! List of pairs excluded from the neighbor lists
@@ -153,20 +152,20 @@ interface
     type(c_ptr), value :: model
   end subroutine EmDee_add_dihedral
 
-  subroutine EmDee_add_rigid_body( md, indexes, N ) bind(C,name="EmDee_add_rigid_body")
+  subroutine EmDee_add_rigid_body( md, N, indexes ) bind(C,name="EmDee_add_rigid_body")
     import :: c_ptr, ib
     type(c_ptr), value :: md, indexes
     integer(ib), value :: N
   end subroutine EmDee_add_rigid_body
 
-  subroutine EmDee_upload( md, L, coords, momenta, forces ) bind(C,name="EmDee_upload")
+  subroutine EmDee_upload( md, Lbox, coords, momenta, forces ) bind(C,name="EmDee_upload")
     import :: c_ptr
-    type(c_ptr), value :: md, L, coords, momenta, forces
+    type(c_ptr), value :: md, Lbox, coords, momenta, forces
   end subroutine EmDee_upload
 
-  subroutine EmDee_download( md, L, coords, momenta, forces ) bind(C,name="EmDee_download")
+  subroutine EmDee_download( md, Lbox, coords, momenta, forces ) bind(C,name="EmDee_download")
     import :: c_ptr
-    type(c_ptr), value :: md, L, coords, momenta, forces
+    type(c_ptr), value :: md, Lbox, coords, momenta, forces
   end subroutine EmDee_download
 
   subroutine EmDee_random_momenta( md, kT, adjust ) bind(C,name="EmDee_random_momenta")
@@ -176,10 +175,11 @@ interface
     integer(ib), value :: adjust
   end subroutine EmDee_random_momenta
 
-  subroutine EmDee_boost( md, lambda, alpha, dt ) bind(C,name="EmDee_boost")
-    import :: c_ptr, rb
+  subroutine EmDee_boost( md, lambda, alpha, dt, t_flag, r_flag ) bind(C,name="EmDee_boost")
+    import :: c_ptr, rb, ib
     type(c_ptr), value :: md
     real(rb),    value :: lambda, alpha, dt
+    integer(ib), value :: t_flag, r_flag
   end subroutine EmDee_boost
 
   subroutine EmDee_move( md, lambda, alpha, dt ) bind(C,name="EmDee_move")
@@ -192,6 +192,15 @@ interface
     import :: c_ptr
     type(c_ptr), value :: md
   end subroutine EmDee_compute
+
+  function EmDee_subset_energy( md, N, atoms, check ) result( Energy ) &
+                                                      bind(C,name="EmDee_subset_energy")
+    import :: c_ptr, ib, rb
+    type(c_ptr), value :: md
+    integer(ib), value :: N
+    type(c_ptr), value :: atoms
+    real(rb)           :: Energy
+  end function EmDee_subset_energy
 
   function EmDee_pair_none( ) result(model) bind(C,name="EmDee_pair_none")
     import :: EmDee_Model
