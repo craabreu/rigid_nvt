@@ -18,6 +18,8 @@ water
 50
 [Passos de equilibração e de produção]
 5000 5000
+[Método de termostato: 1) P-scaling; 2) Boosting; 3) Kamberaj]
+3
 [Parâmetros do termostato: ndamp, nchain, nloops]
-100 3 10
+100 3 1
 
