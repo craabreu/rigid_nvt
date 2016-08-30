@@ -7,7 +7,7 @@ water
 [Semente para geração de números aleatórios]
 2345
 [Passo de integração (fs)]
-1.0
+2.0
 [Número de passos de MD por passo de MC]
 10
 [Distância extra para lista de vizinhos (Å)]
@@ -15,11 +15,13 @@ water
 [Intervalo para gravação de configurações]
 1000000
 [Intervalo para gravação de propriedades]
-50
+20
 [Passos de equilibração e de produção]
-5000 5000
+500 500
 [Método de termostato: 1) P-scaling; 2) Boosting; 3) Kamberaj]
-3
+2
 [Parâmetros do termostato: ndamp, nchain, nloops]
-100 3 1
+100 3 10
+[Termostatização de translação e rotação: 1) junto; 2) separado]
+2
 

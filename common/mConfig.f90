@@ -173,7 +173,7 @@ contains
     integer,        intent(in)    :: unit
     logical,        intent(in), optional :: velocities
     integer :: i
-    real(rb) :: xi, yi, zi, mass
+    real(rb) :: xi, yi, zi
     write(unit,'("LAMMPS data file",/)')
     write(unit,'(A," atom types",/)') trim(int2str(me % ntypes))
     write(unit,'(A," atoms",/)') trim(int2str(me % natoms))
@@ -206,10 +206,11 @@ contains
       if (velocities) then
         write(unit,'(/,"Velocities",/)')
         do i = 1, me % natoms
-          mass = me%mass(me%Type(i))
-          xi = me%Px(i)/mass
-          yi = me%Py(i)/mass
-          zi = me%Pz(i)/mass
+          associate (mass => me%mass(me%Type(i)))
+            xi = me%Px(i)/mass
+            yi = me%Py(i)/mass
+            zi = me%Pz(i)/mass
+          end associate
           write(unit,'(A,X,A)') trim(int2str(i)), trim(join(real2str([xi,yi,zi])))
         end do
       end if

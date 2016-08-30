@@ -23,12 +23,14 @@ integer  :: dof
 real(rb) :: Volume
 
 ! Thermostat variables:
-integer :: method, M, ndamp, nloops
+integer :: method, M, ndamp, nloops, nts
+logical :: single
 class(nhc), pointer :: thermostat(:)
 
 ! Other variables:
-integer  :: step, nReject
+integer  :: step
 real(rb) :: half_dt, KE_sp, kT
+real(rb), pointer :: charges(:)
 character(256) :: filename
 
 integer :: threads
@@ -69,7 +71,7 @@ do i = 1, maxval(Config%Mol)
   call EmDee_add_rigid_body( system, size(indexes), c_loc(indexes) )
 end do
 #ifdef coul
-  call EmDee_set_charges( system, c_loc(Config%Charge) )
+  call EmDee_set_charges( system, c_loc(charges) )
 #endif
 call EmDee_upload( system, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
 call EmDee_random_momenta( system, kT, 1 )
@@ -79,7 +81,6 @@ call Config % Save_XYZ( trim(Base)//".xyz" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press H_nhc" )
 step = 0
 call writeln( properties() )
-nReject = 0
 do step = 1, NEquil
   select case (method)
     case (1); call Pscaling_Step
@@ -96,7 +97,6 @@ call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press H_nhc" )
 step = NEquil
 call writeln( properties() )
-nReject = 0
 do step = NEquil+1, NEquil+NProd
   select case (method)
     case (1); call Pscaling_Step
@@ -124,8 +124,6 @@ contains
     call writeln( "Other time =", real2str(md%totalTime-md%pairTime), "s." )
     call writeln()
     call writeln( "Neighbor list builds =", int2str(md%builds) )
-    call writeln( )
-    call writeln( "Acceptance ratio = ", real2str(one-real(nReject,rb)/Ntotal) )
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
@@ -180,6 +178,7 @@ contains
     read(inp,*); read(inp,*) Nequil, Nprod
     read(inp,*); read(inp,*) method
     read(inp,*); read(inp,*) ndamp, M, nloops
+    read(inp,*); read(inp,*) nts
     close(inp)
     call writeln()
     call writeln( "Base for file names:", Base )
@@ -195,13 +194,15 @@ contains
     call writeln( "Number of production steps:", int2str(Nprod) )
     call writeln( "Thermostat method:", int2str(method) )
     call writeln( "Thermostat parameters:", int2str(ndamp), int2str(M), int2str(nloops) )
+    call writeln( "Number of thermostat chains:", int2str(nts) )
     call writeln()
   end subroutine Read_Specifications
   !-------------------------------------------------------------------------------------------------
   subroutine Setup_Simulation
     real(rb) :: Lx, Ly, Lz
-    Config%Charge = sqrt(kCoul)*Config%Charge
     N = Config % natoms
+    allocate( charges(N) )
+    charges = sqrt(kCoul)*Config%Charge
     Lx = Config % Lx
     Ly = Config % Ly
     Lz = Config % Lz
@@ -213,23 +214,24 @@ contains
     KE_sp = half*dof*kT
     Volume = Lx*Ly*Lz
     call random % setup( seed )
+    if ((nts < 1).or.(nts > 2)) call error( "wrong translation/rotation thermostat scheme" )
+    single = (nts == 1)
     select case (method)
       case (1)
-        allocate( nhc_pscaling :: thermostat(1) )
-        call thermostat % setup( M, kT, ndamp*dt, 6*NB, nloops )
+        allocate( nhc_pscaling :: thermostat(nts) )
+        call thermostat % setup( M, kT, ndamp*dt, (6/nts)*NB, nloops )
       case (2)
-        allocate( nhc_boosting :: thermostat(1) )
-        call thermostat % setup( M, kT, ndamp*dt, 6*NB, nloops )
+        allocate( nhc_boosting :: thermostat(nts) )
+        call thermostat % setup( M, kT, ndamp*dt, (6/nts)*NB, nloops )
       case (3)
-        allocate( nhc_kamberaj :: thermostat(2) )
-        call thermostat % setup( M, kT, ndamp*dt, 3*NB, nloops )
+        allocate( nhc_kamberaj :: thermostat(nts) )
+        call thermostat % setup( M, kT, ndamp*dt, (6/nts)*NB, nloops )
       case default
-        stop "ERROR: unknown thermostat method"
+        call error( "unknown thermostat method" )
     end select
-    
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
-  subroutine Pscaling_Step
+  subroutine Pscaling_Step_Single_Thermostat
     call thermostat(1) % integrate( half_dt, two*md%Kinetic )
     call EmDee_boost( system, zero, thermostat(1)%damping, half_dt, 1, 1 )
     call EmDee_boost( system, one, zero, half_dt, 1, 1 )
@@ -237,15 +239,53 @@ contains
     call EmDee_boost( system, one, zero, half_dt, 1, 1 )
     call thermostat(1) % integrate( half_dt, two*md%Kinetic )
     call EmDee_boost( system, zero, thermostat(1)%damping, half_dt, 1, 1 )
+  end subroutine Pscaling_Step_Single_Thermostat
+  !-------------------------------------------------------------------------------------------------
+  subroutine Pscaling_Step
+    if (single) then
+      call thermostat(1) % integrate( half_dt, two*md%Kinetic )
+      call EmDee_boost( system, zero, thermostat(1)%damping, half_dt, 1, 1 )
+      call EmDee_boost( system, one, zero, half_dt, 1, 1 )
+      call EmDee_move( system, one, zero, dt )
+      call EmDee_boost( system, one, zero, half_dt, 1, 1 )
+      call thermostat(1) % integrate( half_dt, two*md%Kinetic )
+      call EmDee_boost( system, zero, thermostat(1)%damping, half_dt, 1, 1 )
+    else
+      call thermostat % integrate( half_dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call EmDee_boost( system, zero, thermostat(1)%damping, half_dt, 1, 0 )
+      call EmDee_boost( system, zero, thermostat(2)%damping, half_dt, 0, 1 )
+      call EmDee_boost( system, one, zero, half_dt, 1, 1 )
+      call EmDee_move( system, one, zero, dt )
+      call EmDee_boost( system, one, zero, half_dt, 1, 1 )
+      call thermostat % integrate( half_dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call EmDee_boost( system, zero, thermostat(1)%damping, half_dt, 1, 0 )
+      call EmDee_boost( system, zero, thermostat(2)%damping, half_dt, 0, 1 )
+    end if
   end subroutine Pscaling_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Boosting_Step
-    call thermostat(1) % integrate( half_dt, two*md%Kinetic )
-    call EmDee_boost( system, one, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 1 )
-    call EmDee_move( system, one, zero, dt )
-    thermostat(1)%eta(1) = thermostat(1)%eta(1) + thermostat(1)%damping*dt
-    call EmDee_boost( system, one, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 1 )
-    call thermostat(1) % integrate( half_dt, two*md%Kinetic )
+    real(rb) :: alpha1, alpha2
+    if (single) then
+      call thermostat(1) % integrate( half_dt, two*md%Kinetic )
+      alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
+      call EmDee_boost( system, one, alpha1, half_dt, 1, 1 )
+      call EmDee_move( system, one, zero, dt )
+      thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt
+      call EmDee_boost( system, one, alpha1, half_dt, 1, 1 )
+      call thermostat(1) % integrate( half_dt, two*md%Kinetic )
+    else
+      call thermostat % integrate( half_dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
+      alpha2 = thermostat(2)%p(1)*thermostat(2)%InvQ(1)
+      call EmDee_boost( system, one, alpha1, half_dt, 1, 0 )
+      call EmDee_boost( system, one, alpha2, half_dt, 0, 1 )
+      call EmDee_move( system, one, zero, dt )
+      thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt
+      thermostat(2)%eta(1) = thermostat(2)%eta(1) + alpha2*dt
+      call EmDee_boost( system, one, alpha1, half_dt, 1, 0 )
+      call EmDee_boost( system, one, alpha2, half_dt, 0, 1 )
+      call thermostat % integrate( half_dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+    end if
   end subroutine Boosting_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Kamberaj_Single_Thermostat_Step
@@ -259,12 +299,19 @@ contains
   !-------------------------------------------------------------------------------------------------
   subroutine Kamberaj_Step
     call EmDee_boost( system, one, zero, half_dt, 1, 1 )
-    call EmDee_boost( system, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 0 )
-    call EmDee_boost( system, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), half_dt, 0, 1 )
-    call EmDee_move( system, one, zero, dt )
-    call thermostat % integrate( dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
-    call EmDee_boost( system, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), half_dt, 0, 1 )
-    call EmDee_boost( system, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 0 )
+    if (single) then
+      call EmDee_boost( system, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 1 )
+      call EmDee_move( system, one, zero, dt )
+      call thermostat(1) % integrate( dt, two*md%Kinetic )
+      call EmDee_boost( system, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 1 )
+    else
+      call EmDee_boost( system, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 0 )
+      call EmDee_boost( system, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), half_dt, 0, 1 )
+      call EmDee_move( system, one, zero, dt )
+      call thermostat % integrate( dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call EmDee_boost( system, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), half_dt, 0, 1 )
+      call EmDee_boost( system, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), half_dt, 1, 0 )
+    end if
     call EmDee_boost( system, one, zero, half_dt, 1, 1 )
   end subroutine Kamberaj_Step
   !-------------------------------------------------------------------------------------------------
