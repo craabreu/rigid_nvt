@@ -57,7 +57,6 @@ call Config % Read( trim(Base)//".lmp" )
 call Setup_Simulation
 
 md = EmDee_system( threads, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
-!system = c_loc(md)
 
 allocate( model(Config%ntypes) )
 do i = 1, Config%ntypes

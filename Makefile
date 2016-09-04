@@ -5,7 +5,6 @@ SRCS = $(wildcard $(COMMON)/*.f90)
 EXECUTABLE ?= nvt
 LIB = mscommon
 LIBFILE = $(COMMON)/lib$(LIB).a
-EMDEE = /home/charlles/Projects/EmDee/lib
 
 .PHONY: all lj lj_coul
 
@@ -16,10 +15,10 @@ lj: $(EXECUTABLE)_lj
 lj_coul: $(EXECUTABLE)_lj_coul
 
 $(EXECUTABLE)_lj_coul: $(EXECUTABLE).f90 $(LIBFILE) $(SRCS)
-	$(FORT) $(FLAGS) -Dcoul -J$(COMMON) -L$(COMMON) -L$(EMDEE) -o $@ $< -l$(LIB) -lemdee
+	$(FORT) $(FLAGS) -Dcoul -J$(COMMON) -L$(COMMON) -o $@ $< -l$(LIB) -lemdee
 
 $(EXECUTABLE)_lj: $(EXECUTABLE).f90 $(LIBFILE) $(SRCS)
-	$(FORT) $(FLAGS) -J$(COMMON) -L$(COMMON) -L$(EMDEE) -o $@ $< -l$(LIB) -lemdee
+	$(FORT) $(FLAGS) -J$(COMMON) -L$(COMMON) -o $@ $< -l$(LIB) -lemdee
 
 $(LIBFILE): $(SRCS)
 	make -C $(COMMON) lib
