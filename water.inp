@@ -1,5 +1,7 @@
 [Base para nomes de arquivos]
 water
+[Arquivo com configuração inicial]
+water.lmp
 [Temperatura (K)]
 298.15
 [Distância de corte (Å)]

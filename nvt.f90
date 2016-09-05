@@ -31,7 +31,7 @@ class(nhc), pointer :: thermostat(:)
 integer  :: step
 real(rb) :: half_dt, KE_sp, kT
 real(rb), pointer :: charges(:)
-character(256) :: filename
+character(256) :: filename, configFile
 
 #include "emdee.f03"
 
@@ -39,7 +39,6 @@ integer :: threads
 integer, allocatable, target :: indexes(:)
 type(tEmDee) :: md
 type(c_ptr), allocatable :: model(:)
-!type(c_ptr) :: system
 type(kiss) :: random
 
 ! Executable code:
@@ -53,7 +52,7 @@ call Get_Command_Line_Args( threads, filename )
 call Read_Specifications( filename )
 
 call init_log( trim(Base)//".log" )
-call Config % Read( trim(Base)//".lmp" )
+call Config % Read( configFile )
 call Setup_Simulation
 
 md = EmDee_system( threads, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
@@ -167,6 +166,7 @@ contains
     integer :: inp
     open( newunit=inp, file = file, status = "old" )
     read(inp,*); read(inp,*) Base
+    read(inp,*); read(inp,*) configFile
     read(inp,*); read(inp,*) T
     read(inp,*); read(inp,*) Rc
     read(inp,*); read(inp,*) seed
@@ -182,6 +182,7 @@ contains
     close(inp)
     call writeln()
     call writeln( "Base for file names:", Base )
+    call writeln( "Name of configuration file:", configFile )
     call writeln( "Temperature:", real2str(T), "K" )
     call writeln( "Cutoff distance:", real2str(Rc), "Å" )
     call writeln( "Seed for random numbers:", int2str(seed) )

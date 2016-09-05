@@ -40,6 +40,7 @@ type tConfig
     procedure :: tConfig_Save_XYZ_to_unit, tConfig_Save_XYZ_to_file
     generic :: Save_XYZ => tConfig_Save_XYZ_to_unit, tConfig_Save_XYZ_to_file
 
+    procedure :: bring_to_central_box => tConfig_bring_to_central_box
 end type tConfig
 
 type(tConfig) :: Config
@@ -111,10 +112,6 @@ contains
           me%Px => me%P(1,:)
           me%Py => me%P(2,:)
           me%Pz => me%P(3,:)
-
-!          allocate( me%Rx(N), me%Ry(N), me%Rz(N) )
-!          allocate( me%Fx(N), me%Fy(N), me%Fz(N) )
-!          allocate( me%Px(N), me%Py(N), me%Pz(N) )
           allocate( me%InvMass(N) )
         end associate
         do k = 1, me % natoms
@@ -151,6 +148,7 @@ contains
 
       end if
     end do
+    call me % bring_to_central_box()
   end subroutine tConfig_Read
 
   !=================================================================================================
@@ -190,12 +188,6 @@ contains
     end do
     write(unit,'(/,"Atoms",/)')
     do i = 1, me % natoms
-!      xi = (me%Rx(i) - me%xmin)/me%Lx
-!      yi = (me%Ry(i) - me%ymin)/me%Ly
-!      zi = (me%Rz(i) - me%zmin)/me%Lz
-!      xi = me%xmin + me%Lx*(xi - floor(xi))
-!      yi = me%ymin + me%Ly*(yi - floor(yi))
-!      zi = me%zmin + me%Lz*(zi - floor(zi))
       xi = me%Rx(i)
       yi = me%Ry(i)
       zi = me%Rz(i)
@@ -254,17 +246,35 @@ contains
     close(out)
   end subroutine tConfig_Save_XYZ_to_file
 
+
   !=================================================================================================
 
   subroutine tConfig_Save_XYZ_to_unit( me, unit )
     class(tConfig), intent(inout) :: me
     integer,        intent(in)    :: unit
-    integer  :: i, m, nmol, imol
-    real(rb) :: imass, ri(3), L(3), Lmin(3)
-    real(rb), allocatable :: rcm(:,:), molMass(:)
+    integer :: i, m
     character(sl) :: itype
+    call me % bring_to_central_box()
     write(unit,*) me % natoms
     write(unit,*)
+    do i = 1, me % natoms
+      m = nint(me%Mass(me%Type(i)))
+      if (any(atomic_mass == m)) then
+        itype = element(maxloc(transfer(atomic_mass == m, atomic_mass),dim=1))
+      else
+        itype = int2str(me%Type(i))
+      end if
+      write(unit,*) trim(itype), me%R(:,i)
+    end do
+  end subroutine tConfig_Save_XYZ_to_unit
+
+  !=================================================================================================
+
+  subroutine tConfig_bring_to_central_box( me )
+    class(tConfig), intent(inout) :: me
+    integer  :: i, nmol, imol
+    real(rb) :: imass, ri(3), L(3), Lmin(3)
+    real(rb), allocatable :: rcm(:,:), molMass(:)
     nmol = maxval(me%mol)
     allocate( rcm(3,nmol), molMass(nmol) )
     rcm = 0.0_rb
@@ -284,16 +294,9 @@ contains
     end do
     do i = 1, me % natoms
       imol = me%mol(i)
-      ri = me%R(:,i) - L*anint((me%R(:,i) - rcm(:,imol))/L)
-      m = nint(me%Mass(me%Type(i)))
-      if (any(atomic_mass == m)) then
-        itype = element(maxloc(transfer(atomic_mass == m, atomic_mass),dim=1))
-      else
-        itype = int2str(me%Type(i))
-      end if
-      write(unit,*) trim(itype), ri
+      me%R(:,i) = me%R(:,i) - L*anint((me%R(:,i) - rcm(:,imol))/L)
     end do
-  end subroutine tConfig_Save_XYZ_to_unit
+  end subroutine tConfig_bring_to_central_box
 
   !=================================================================================================
 
