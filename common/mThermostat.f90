@@ -106,7 +106,6 @@ contains
       end do
       call integrate( me, 1, me%p(2)*me%InvQ(2), exp(-alphaSum*twodt)*twoKE - me%LkT, dt_2 )
       alpha = me%p(1)*me%InvQ(1)
-      me%eta(1) = me%eta(1) + alpha*dt
       alphaSum = alphaSum + alpha
       call integrate( me, 1, me%p(2)*me%InvQ(2), exp(-alphaSum*twodt)*twoKE - me%LkT, dt_2 )
       do j = 2, me%M-1
@@ -114,6 +113,7 @@ contains
       end do
       me%p(me%M) = me%p(me%M) + (me%p(me%M-1)**2*me%InvQ(me%M-1) - me%kT)*dt_2
     end do
+    me%eta(1) = me%eta(1) + alphaSum*dt
     me%damping = alphaSum/me%nloops
 
     contains
@@ -168,7 +168,6 @@ contains
   elemental subroutine nhc_kamberaj_integrate( me, timestep, TwoKE )
     class(nhc_kamberaj), intent(inout) :: me
     real(rb),            intent(in)    :: timestep, TwoKE
-
 
     integer :: i, j
     real(rb) :: dt, dt_2

@@ -55,7 +55,7 @@ call init_log( trim(Base)//".log" )
 call Config % Read( configFile )
 call Setup_Simulation
 
-md = EmDee_system( threads, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
+md = EmDee_system( threads, 1, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
 
 allocate( model(Config%ntypes) )
 do i = 1, Config%ntypes
@@ -83,6 +83,7 @@ step = 0
 call writeln( properties() )
 do step = 1, NEquil
   select case (method)
+    case (0); call Verlet_Step
     case (1); call Pscaling_Step
     case (2); call Boosting_Step
     case (3); call Kamberaj_Step
@@ -98,6 +99,7 @@ step = NEquil
 call writeln( properties() )
 do step = NEquil+1, NEquil+NProd
   select case (method)
+    case (0); call Verlet_Step
     case (1); call Pscaling_Step
     case (2); call Boosting_Step
     case (3); call Kamberaj_Step
@@ -218,29 +220,20 @@ contains
     if ((nts < 1).or.(nts > 2)) call error( "wrong translation/rotation thermostat scheme" )
     single = (nts == 1)
     select case (method)
-      case (1)
-        allocate( nhc_pscaling :: thermostat(nts) )
-        call thermostat % setup( M, kT, ndamp*dt, (6/nts)*NB, nloops )
-      case (2)
-        allocate( nhc_boosting :: thermostat(nts) )
-        call thermostat % setup( M, kT, ndamp*dt, (6/nts)*NB, nloops )
-      case (3)
-        allocate( nhc_kamberaj :: thermostat(nts) )
-        call thermostat % setup( M, kT, ndamp*dt, (6/nts)*NB, nloops )
-      case default
-        call error( "unknown thermostat method" )
+      case (0,1); allocate( nhc_pscaling :: thermostat(nts) )
+      case (2); allocate( nhc_boosting :: thermostat(nts) )
+      case (3); allocate( nhc_kamberaj :: thermostat(nts) )
+      case default; call error( "unknown thermostat method" )
     end select
+    call thermostat(1) % setup( M, kT, ndamp*dt, (6/nts)*NB-3, nloops )
+    if (nts == 2) call thermostat(2) % setup( M, kT, ndamp*dt, 3*NB, nloops )
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
-  subroutine Pscaling_Step_Single_Thermostat
-    call thermostat(1) % integrate( half_dt, two*md%Kinetic )
-    call EmDee_boost( md, zero, thermostat(1)%damping, half_dt, 1, 1 )
+  subroutine Verlet_Step
     call EmDee_boost( md, one, zero, half_dt, 1, 1 )
     call EmDee_move( md, one, zero, dt )
     call EmDee_boost( md, one, zero, half_dt, 1, 1 )
-    call thermostat(1) % integrate( half_dt, two*md%Kinetic )
-    call EmDee_boost( md, zero, thermostat(1)%damping, half_dt, 1, 1 )
-  end subroutine Pscaling_Step_Single_Thermostat
+  end subroutine Verlet_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
     if (single) then
@@ -252,13 +245,15 @@ contains
       call thermostat(1) % integrate( half_dt, two*md%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, half_dt, 1, 1 )
     else
-      call thermostat % integrate( half_dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat(1) % integrate( half_dt, two*(md%Kinetic - md%Rotational) )
+      call thermostat(2) % integrate( half_dt, two*md%Rotational )
       call EmDee_boost( md, zero, thermostat(1)%damping, half_dt, 1, 0 )
       call EmDee_boost( md, zero, thermostat(2)%damping, half_dt, 0, 1 )
       call EmDee_boost( md, one, zero, half_dt, 1, 1 )
       call EmDee_move( md, one, zero, dt )
       call EmDee_boost( md, one, zero, half_dt, 1, 1 )
-      call thermostat % integrate( half_dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat(1) % integrate( half_dt, two*(md%Kinetic - md%Rotational) )
+      call thermostat(2) % integrate( half_dt, two*md%Rotational )
       call EmDee_boost( md, zero, thermostat(1)%damping, half_dt, 1, 0 )
       call EmDee_boost( md, zero, thermostat(2)%damping, half_dt, 0, 1 )
     end if
