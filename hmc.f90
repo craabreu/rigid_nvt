@@ -72,21 +72,21 @@ call EmDee_random_momenta( system, kT, 1, seed )
 
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
-call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press" )
+call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press Acceptance" )
 step = 0
-call writeln( properties() )
+call writeln( properties(1) )
 nReject = 0
 do step = 1, NEquil
   call Monte_Carlo_Step
-  if (mod(step,thermo) == 0) call writeln( properties() )
+  if (mod(step,thermo) == 0) call writeln( properties(step) )
 end do
 call Report( NEquil )
 
 call writeln( )
 call writeln( "Memory usage" )
-call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press" )
+call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press Acceptance" )
 step = NEquil
-call writeln( properties() )
+call writeln( properties( 1 ) )
 nReject = 0
 do step = NEquil+1, NEquil+NProd
   call Monte_Carlo_Step
@@ -94,7 +94,7 @@ do step = NEquil+1, NEquil+NProd
     call EmDee_download( system, c_null_ptr, c_loc(Config%R), c_null_ptr, c_null_ptr )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
   end if
-  if (mod(step,thermo) == 0) call writeln( properties() )
+  if (mod(step,thermo) == 0) call writeln( properties(step-Nequil) )
 end do
 call Report( NProd )
 
@@ -115,7 +115,8 @@ contains
     call writeln( "Acceptance ratio = ", real2str(one-real(nReject,rb)/Ntotal) )
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
-  character(sl) function properties()
+  character(sl) function properties( Ntotal )
+    integer, intent(in) :: Ntotal
     real(rb) :: Temp
     Temp = (system%Kinetic/KE_sp)*T
     properties = trim(adjustl(int2str(step))) // " " // &
@@ -125,7 +126,8 @@ contains
                                  mvv2e*system%Rotational, &
                                  mvv2e*system%Potential, &
                                  mvv2e*(system%Potential + system%Kinetic), &
-                                 Pconv*(nbodies*kB*Temp + system%Virial)/Volume]))
+                                 Pconv*(nbodies*kB*Temp + system%Virial)/Volume, &
+                                 one-real(nReject,rb)/Ntotal]))
   end function properties
   !-------------------------------------------------------------------------------------------------
   subroutine Get_Command_Line_Args( threads, filename )
