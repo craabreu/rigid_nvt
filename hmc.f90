@@ -3,7 +3,7 @@ program lj_hmc
 use mGlobal
 use mConfig
 use mRandom
-use EmDee
+use iso_c_binding
 
 implicit none
 
@@ -14,7 +14,7 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 
 ! Simulation specifications:
 character(sl) :: Base
-integer       :: i, j, N, seed, MDsteps, Nconf, thermo, Nequil, Nprod
+integer       :: i, j, N, nbodies, seed, MDsteps, Nconf, thermo, Nequil, Nprod
 real(rb)      :: T, Rc, dt, skin
 
 ! System properties:
@@ -24,14 +24,14 @@ real(rb) :: Volume
 ! Other variables:
 integer  :: step, nReject
 real(rb) :: half_dt, KE_sp, kT
-real(rb) :: Acc_Press = zero
-character(256) :: filename
+character(256) :: filename, configFile
+
+#include "emdee.f03"
 
 integer :: threads
 integer, allocatable, target :: indexes(:)
-type(tEmDee), target :: md
-type(EmDee_Model), pointer :: model(:)
-type(c_ptr) :: system
+type(tEmDee) :: system
+type(c_ptr), allocatable :: model(:)
 type(kiss) :: random
 
 ! Executable code:
@@ -45,22 +45,22 @@ call Get_Command_Line_Args( threads, filename )
 call Read_Specifications( filename )
 
 call init_log( trim(Base)//".log" )
-call Config % Read( trim(Base)//".lmp" )
+call Config % Read( configFile )
 call Setup_Simulation
 
-md = EmDee_system( threads, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass), seed )
-system = c_loc(md)
+system = EmDee_system( threads, 1, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
 
 allocate( model(Config%ntypes) )
 do i = 1, Config%ntypes
-  if (abs(Config%epsilon(i)) < epsilon(1.0_rb)) then
-    model(i) = EmDee_pair_none()
+  if (abs(Config%epsilon(i)) < 1.e-8_rb) then
+    model(i) = EmDee_model_none()
   else
     model(i) = EmDee_pair_lj_sf( Config%epsilon(i)/mvv2e, Config%sigma(i), Rc )
   end if
-  call EmDee_set_pair_type( system, i, i, c_loc(model(i)) )
+  call EmDee_set_pair_type( system, i, i, model(i) )
 end do
-do i = 1, maxval(Config%Mol)
+nbodies = maxval(Config%Mol)
+do i = 1, nbodies
   indexes = pack( [(j,j=1,N)], Config%Mol == i )
   call EmDee_add_rigid_body( system, size(indexes), c_loc(indexes) )
 end do
@@ -68,34 +68,20 @@ end do
   call EmDee_set_charges( system, c_loc(Config%Charge) )
 #endif
 call EmDee_upload( system, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
-call EmDee_random_momenta( system, kT, 1 )
+call EmDee_random_momenta( system, kT, 1, seed )
 
 call Config % Save_XYZ( trim(Base)//".xyz" )
-
-!call EmDee_compute( system )
-
-!block
-!  integer, target :: atoms(5)
-!  real(rb) :: E
-!  atoms = [1,10,19,45,109]
-!  E = EmDee_subset_energy( system, 5, c_loc(atoms), 0 )
-!  print*, E
-!  stop
-!end block
 
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press" )
 step = 0
 call writeln( properties() )
 nReject = 0
 do step = 1, NEquil
-!  call Monte_Carlo_Step
-  call Verlet_Step
+  call Monte_Carlo_Step
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
 call Report( NEquil )
 
-Acc_Press = zero
-call EmDee_compute( system )
 call writeln( )
 call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press" )
@@ -103,8 +89,7 @@ step = NEquil
 call writeln( properties() )
 nReject = 0
 do step = NEquil+1, NEquil+NProd
-!  call Monte_Carlo_Step
-  call Verlet_Step
+  call Monte_Carlo_Step
   if (mod(step,Nconf)==0) then
     call EmDee_download( system, c_null_ptr, c_loc(Config%R), c_null_ptr, c_null_ptr )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
@@ -120,29 +105,27 @@ contains
   !-------------------------------------------------------------------------------------------------
   subroutine Report( Ntotal )
     integer, intent(in) :: Ntotal
-    call writeln( "Loop time of", real2str(md%totalTime), "s." )
+    call writeln( "Loop time of", real2str(system%totalTime), "s." )
     call writeln()
-    call writeln( "Pair time  =", real2str(md%pairTime), "s." )
-    call writeln( "Other time =", real2str(md%totalTime-md%pairTime), "s." )
+    call writeln( "Pair time  =", real2str(system%pairTime), "s." )
+    call writeln( "Other time =", real2str(system%totalTime-system%pairTime), "s." )
     call writeln()
-    call writeln( "Neighbor list builds =", int2str(md%builds) )
+    call writeln( "Neighbor list builds =", int2str(system%builds) )
     call writeln( )
     call writeln( "Acceptance ratio = ", real2str(one-real(nReject,rb)/Ntotal) )
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
     real(rb) :: Temp
-    Temp = (md%Kinetic/KE_sp)*T
-    Acc_Press = Acc_Press + Pconv*(md%nbodies*kB*Temp + md%Virial)/Volume
-
+    Temp = (system%Kinetic/KE_sp)*T
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
-                                 mvv2e*md%Kinetic, &
-                                 mvv2e*(md%Kinetic - md%Rotational), &
-                                 mvv2e*md%Rotational, &
-                                 mvv2e*md%Potential, &
-                                 mvv2e*(md%Potential + md%Kinetic), &
-                                 Pconv*((md%nbodies-1)*kB*Temp + md%Virial)/Volume]))
+                                 mvv2e*system%Kinetic, &
+                                 mvv2e*(system%Kinetic - system%Rotational), &
+                                 mvv2e*system%Rotational, &
+                                 mvv2e*system%Potential, &
+                                 mvv2e*(system%Potential + system%Kinetic), &
+                                 Pconv*(nbodies*kB*Temp + system%Virial)/Volume]))
   end function properties
   !-------------------------------------------------------------------------------------------------
   subroutine Get_Command_Line_Args( threads, filename )
@@ -170,6 +153,7 @@ contains
     integer :: inp
     open( newunit=inp, file = file, status = "old" )
     read(inp,*); read(inp,*) Base
+    read(inp,*); read(inp,*) configFile
     read(inp,*); read(inp,*) T
     read(inp,*); read(inp,*) Rc
     read(inp,*); read(inp,*) seed
@@ -182,6 +166,7 @@ contains
     close(inp)
     call writeln()
     call writeln( "Base for file names: ", Base )
+    call writeln( "Name of configuration file:", configFile )
     call writeln( "Temperature: ", real2str(T), "K" )
     call writeln( "Cutoff distance: ", real2str(Rc), "Å" )
     call writeln( "Seed for random numbers: ", int2str(seed) )
@@ -204,7 +189,7 @@ contains
     Lz = Config % Lz
     if (Rc+skin >= half*min(Lx,Ly,Lz)) call error( "minimum image convention failed!" )
     half_dt = half*dt
-    dof = 6*maxval(Config%Mol) - 3
+    dof = 6*maxval(Config%Mol)
     KE_sp = half*dof*kB*T
     Volume = Lx*Ly*Lz
     kT = kB*T
@@ -222,19 +207,19 @@ contains
     real(rb) :: DeltaE, Potential, Virial
     real(rb), target :: Rsave(3,N), Fsave(3,N)
     call EmDee_download( system, c_null_ptr, c_loc(Rsave), c_null_ptr, c_loc(Fsave) )
-    Potential = md%Potential
-    Virial = md%Virial
-    call EmDee_random_momenta( system, kT, 0 )
-    DeltaE = md%Potential + md%Kinetic
+    Potential = system%Potential
+    Virial = system%Virial
+    call EmDee_random_momenta( system, kT, 0, seed )
+    DeltaE = system%Potential + system%Kinetic
     do step = 1, MDsteps
       call Verlet_Step
     end do
-    DeltaE = md%Potential + md%Kinetic - DeltaE
+    DeltaE = system%Potential + system%Kinetic - DeltaE
     if (DeltaE >= zero) then
       if (random % uniform() > exp(-DeltaE/kT)) then
         call EmDee_upload( system, c_null_ptr, c_loc(Rsave), c_null_ptr, c_loc(Fsave) )
-        md%Potential = Potential
-        md%Virial = Virial
+        system%Potential = Potential
+        system%Virial = Virial
         nReject = nReject + 1
       end if
     end if

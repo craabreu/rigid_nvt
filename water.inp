@@ -20,10 +20,10 @@ water.lmp
 20
 [Passos de equilibração e de produção]
 500 500
-[Método de termostato: 1) P-scaling; 2) Boosting; 3) Kamberaj]
-0
+[Método de termostato: 0) NVE; 1) P-scaling; 2) Boosting; 3) Kamberaj; 4) Hybrid; 5) New_Hybrid]
+5
 [Parâmetros do termostato: ndamp, nchain, nloops]
-100 6 1
+100 6 10
 [Termostatização de translação e rotação: 1) junto; 2) separado]
 2
 
