@@ -98,6 +98,7 @@ do step = NEquil+1, NEquil+NProd
 end do
 call Report( NProd )
 
+call EmDee_download( system, c_null_ptr, c_loc(Config%R), c_loc(Config%P), c_null_ptr )
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
