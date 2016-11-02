@@ -9,7 +9,7 @@ water.lmp
 [Semente para geração de números aleatórios]
 2345
 [Passo de integração (fs)]
-1.0
+8.0
 [Número de passos de MD por passo de MC]
 10
 [Distância extra para lista de vizinhos (Å)]
@@ -21,7 +21,7 @@ water.lmp
 [Passos de equilibração e de produção]
 500 500
 [Método de termostato: 0) NVE; 1) P-scaling; 2) Boosting; 3) Kamberaj; 4) Hybrid; 5) New_Hybrid]
-5
+0
 [Parâmetros do termostato: ndamp, nchain, nloops]
 100 6 10
 [Termostatização de translação e rotação: 1) junto; 2) separado]

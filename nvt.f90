@@ -15,7 +15,7 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 
 ! Simulation specifications:
 character(sl) :: Base
-integer       :: i, j, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod
+integer       :: i, j, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
 real(rb)      :: T, Rc, dt, skin
 
 ! System properties:
@@ -51,11 +51,11 @@ type(kiss) :: random
 call Get_Command_Line_Args( threads, filename )
 call Read_Specifications( filename )
 
-call init_log( trim(Base)//".log" )
 call Config % Read( configFile )
 call Setup_Simulation
 
 md = EmDee_system( threads, 1, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
+md%rotationMode = rotationMode
 
 allocate( model(Config%ntypes) )
 do i = 1, Config%ntypes
@@ -75,10 +75,9 @@ end do
 #endif
 call EmDee_upload( md, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
 call EmDee_random_momenta( md, kT, 1, seed )
-
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
-call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press H_nhc" )
+call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_1 KinEng_2 KinEng_3 PotEng TotEng Virial Press H_nhc" )
 step = 0
 call writeln( properties() )
 do step = 1, NEquil
@@ -96,7 +95,7 @@ call Report( NEquil )
 
 call writeln( )
 call writeln( "Memory usage" )
-call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press H_nhc" )
+call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_1 KinEng_2 KinEng_3 PotEng TotEng Virial Press H_nhc" )
 step = NEquil
 call writeln( properties() )
 do step = NEquil+1, NEquil+NProd
@@ -134,15 +133,20 @@ contains
   character(sl) function properties()
     real(rb) :: Temp
     real(rb) :: Etotal
+    real(rb), target :: Kr(3)
     Temp = (md%Kinetic/KE_sp)*T
     Etotal = md%Potential + md%Kinetic
+    call EmDee_Rotational_Energies( md, Kr )
+    Kr = mvv2e*Kr
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
                                  mvv2e*md%Kinetic, &
                                  mvv2e*(md%Kinetic - md%Rotational), &
                                  mvv2e*md%Rotational, &
+                                 Kr, &
                                  mvv2e*md%Potential, &
                                  mvv2e*Etotal, &
+                                 mvv2e*md%Virial, &
                                  Pconv*((NB-1)*kB*Temp + md%Virial)/Volume, &
                                  mvv2e*(Etotal + sum(thermostat%energy())) ]))
   end function properties
@@ -185,7 +189,9 @@ contains
     read(inp,*); read(inp,*) method
     read(inp,*); read(inp,*) ndamp, M, nloops
     read(inp,*); read(inp,*) nts
+    read(inp,*); read(inp,*) rotationMode
     close(inp)
+    call init_log( trim(Base)//".log" )
     call writeln()
     call writeln( "Base for file names:", Base )
     call writeln( "Name of configuration file:", configFile )
@@ -202,6 +208,11 @@ contains
     call writeln( "Thermostat method:", int2str(method) )
     call writeln( "Thermostat parameters:", int2str(ndamp), int2str(M), int2str(nloops) )
     call writeln( "Number of thermostat chains:", int2str(nts) )
+    if (rotationMode == 0) then
+      call writeln( "Rotation mode: exact solution" )
+    else
+      call writeln( "Rotation mode: Miller with", int2str(rotationMode), "respa steps" )
+    end if
     call writeln()
   end subroutine Read_Specifications
   !-------------------------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 FORT = gfortran
-FLAGS = -march=native -ffast-math -funroll-loops -fstrict-aliasing -O3 -Wunused -cpp -fopenmp
+FLAGS = -fno-range-check -march=native -ffast-math -funroll-loops -fstrict-aliasing -O3 -Wunused -cpp -fopenmp
 COMMON = common
 SRCS = $(wildcard $(COMMON)/*.f90)
 EXECUTABLE ?= hmc

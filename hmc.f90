@@ -55,7 +55,7 @@ do i = 1, Config%ntypes
   if (abs(Config%epsilon(i)) < 1.e-8_rb) then
     model(i) = EmDee_model_none()
   else
-    model(i) = EmDee_pair_lj_sf( Config%epsilon(i)/mvv2e, Config%sigma(i), Rc )
+    model(i) = EmDee_pair_lj( Config%epsilon(i)/mvv2e, Config%sigma(i) )
   end if
   call EmDee_set_pair_type( system, i, i, model(i) )
 end do
@@ -67,21 +67,21 @@ end do
 #ifdef coul
   call EmDee_set_charges( system, c_loc(Config%Charge) )
 #endif
-call EmDee_upload( system, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
-call EmDee_random_momenta( system, kT, 1, seed )
-
+call EmDee_upload( system, c_loc(Config%Lx), c_loc(Config%R), c_loc(Config%P), c_null_ptr )
+!call EmDee_random_momenta( system, kT, 1, seed )
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press Acceptance" )
 step = 0
 call writeln( properties(1) )
+stop
 nReject = 0
 do step = 1, NEquil
   call Monte_Carlo_Step
   if (mod(step,thermo) == 0) call writeln( properties(step) )
 end do
 call Report( NEquil )
-
+stop
 call writeln( )
 call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Press Acceptance" )
@@ -209,11 +209,10 @@ contains
     integer :: step
     real(rb) :: DeltaE, Potential, Virial
     real(rb), target :: Rsave(3,N), Fsave(3,N)
-    call EmDee_download( system, c_null_ptr, c_loc(Rsave), c_null_ptr, c_loc(Fsave) )
+    DeltaE = system%Potential + system%Kinetic
     Potential = system%Potential
     Virial = system%Virial
-    call EmDee_random_momenta( system, kT, 0, seed )
-    DeltaE = system%Potential + system%Kinetic
+    call EmDee_download( system, c_null_ptr, c_loc(Rsave), c_null_ptr, c_loc(Fsave) )
     do step = 1, MDsteps
       call Verlet_Step
     end do
@@ -226,6 +225,7 @@ contains
         nReject = nReject + 1
       end if
     end if
+    call EmDee_random_momenta( system, kT, 0, seed )
   end subroutine Monte_Carlo_Step
   !-------------------------------------------------------------------------------------------------
 end program lj_hmc
