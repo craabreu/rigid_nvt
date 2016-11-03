@@ -26,4 +26,6 @@ water.lmp
 100 6 10
 [Termostatização de translação e rotação: 1) junto; 2) separado]
 2
+[Rotation mode: 0 - Exact; n > 0 - Miller with n respa steps]
+0
 
