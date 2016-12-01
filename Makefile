@@ -2,7 +2,7 @@ FORT = gfortran
 FLAGS = -fno-range-check -march=native -ffast-math -funroll-loops -fstrict-aliasing -O3 -Wunused -cpp -fopenmp
 COMMON = common
 SRCS = $(wildcard $(COMMON)/*.f90)
-EXECUTABLE ?= hmc
+EXECUTABLE ?= expens
 LIB = mscommon
 LIBFILE = $(COMMON)/lib$(LIB).a
 

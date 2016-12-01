@@ -200,9 +200,9 @@ contains
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
   subroutine Verlet_Step
-    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt, 1, 1 )
+    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt )
     call EmDee_move( system, 1.0_rb, 0.0_rb, dt )
-    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt, 1, 1 )
+    call EmDee_boost( system, 1.0_rb, 0.0_rb, half_dt )
   end subroutine Verlet_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Monte_Carlo_Step
