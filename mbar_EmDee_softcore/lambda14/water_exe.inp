@@ -1,0 +1,39 @@
+[Base para nomes de arquivos]
+water14
+[Arquivo com configuração inicial]
+water_vol.lmp
+[Temperatura (K)]
+300.0
+[Distância de corte (Å)]
+9.0
+[Semente para geração de números aleatórios]
+2345
+[Passo de integração (fs)]
+1.0
+[Número de passos de MD por passo de MC]
+10
+[Distância extra para lista de vizinhos (Å)]
+2
+[Intervalo para gravação de configurações]
+1000000
+[Intervalo para gravação de propriedades]
+20
+[Passos de equilibração e de produção]
+500000 2000000
+[Parâmetros do termostato: ndamp, nchain, nloops]
+100 6 10
+[Modo de rotação: 0 - Solução exata; n > 0 - Miller com n passos RESPA]
+0
+[Número de tipos de átomos do soluto]
+2
+[Índices dos tipos de átomos do soluto]
+1 2
+[Número de valores de lambda]
+16
+[Lambdas e pesos]
+0.0 0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.65 0.7 0.75 0.8 0.85 0.9 0.95 1.0
+[Pesos]
+0 0.056904279 0.2411804983 0.9573618821 2.0428739776 2.7132653895 2.8234636141 2.7132937714 2.6599498707 2.5765272503 2.5230123237 2.4065069105 2.2797623438 2.1501712231 2.0379717853 1.9163640773
+[Índice do lambda inicial]
+14
+
