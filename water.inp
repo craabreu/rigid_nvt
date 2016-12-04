@@ -25,7 +25,7 @@ water.lmp
 [Parâmetros do termostato: ndamp, nchain, nloops]
 100 6 10
 [Termostatização de translação e rotação: 1) junto; 2) separado]
-2
+1
 [Rotation mode: 0 - Exact; n > 0 - Miller with n respa steps]
 0
 []

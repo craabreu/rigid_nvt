@@ -1,5 +1,18 @@
+# Compilers and their basic options:
 FORT = gfortran
-FLAGS = -fno-range-check -march=native -ffast-math -funroll-loops -fstrict-aliasing -O3 -Wunused -cpp -fopenmp
+
+BASIC_OPTS = -march=native -m64 -fPIC -fopenmp -cpp -fmax-errors=1
+BASIC_OPTS += -Wall -Wno-maybe-uninitialized
+FAST_OPTS = -Ofast
+DEBUG_OPTS = -g -Og -fcheck=all -Ddebug
+ifeq ($(DEBUG), 1)
+  FLAGS = $(BASIC_OPTS) $(DEBUG_OPTS)
+else
+  FLAGS = $(BASIC_OPTS) $(FAST_OPTS)
+endif
+
+#FORT = gfortran
+#FLAGS = -fno-range-check -march=native -ffast-math -funroll-loops -fstrict-aliasing -O3 -Wunused -cpp -fopenmp
 COMMON = common
 SRCS = $(wildcard $(COMMON)/*.f90)
 EXECUTABLE ?= expens

@@ -8,6 +8,8 @@ use iso_c_binding
 
 implicit none
 
+#define isZero(X) (abs(X) < epsilon(1.0_8))
+
 real(rb), parameter :: mvv2e = 2390.057364_rb         ! Da*A²/fs² to kcal/mol
 real(rb), parameter :: kB = 8.31451E-7_rb             ! Boltzmann constant in Da*A²/(fs²*K)
 real(rb), parameter :: Pconv = 1.6388244954E+8_rb     ! Da/(A*fs²) to atm
@@ -15,7 +17,7 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 
 ! Simulation specifications:
 character(sl) :: Base
-integer       :: i, j, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
+integer       :: i, j, k, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
 real(rb)      :: T, Rc, dt, skin
 
 ! System properties:
@@ -23,8 +25,16 @@ integer  :: dof
 real(rb) :: Volume
 
 ! Thermostat variables:
-integer :: method, M, ndamp, nloops
-class(nhc), pointer :: thermostat
+integer :: M, ndamp, nloops
+type(nhc_pscaling) :: thermostat
+
+! Expanded ensemble variables:
+logical :: iInSolute, jInSolute
+integer :: Nlayers, Natoms, layer
+integer,  allocatable :: soluteType(:)
+real(rb), allocatable :: lambda(:), eta(:)
+integer,  pointer :: solute_atoms(:)
+real(rb), pointer :: energy(:)
 
 ! Other variables:
 integer  :: step
@@ -37,7 +47,7 @@ character(256) :: filename, configFile
 integer :: threads
 integer, allocatable, target :: indexes(:)
 type(tEmDee) :: md
-type(c_ptr), allocatable :: model(:)
+type(c_ptr) :: model
 type(kiss) :: random
 
 ! Executable code:
@@ -47,23 +57,55 @@ call Read_Specifications( filename )
 call Config % Read( configFile )
 call Setup_Simulation
 
-md = EmDee_system( threads, 1, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
+if (.not.allocated( Config%epsilon )) call error( "Pair coefficients were not found" )
+solute_atoms = pack( [(i,i=1,N)], [(any(soluteType == Config%Type(i)),i=1,N)] )
+Natoms = size(solute_atoms)
+
+md = EmDee_system( threads, Nlayers, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
 md%Options%rotationMode = rotationMode
 
-allocate( model(Config%ntypes) )
-do i = 1, Config%ntypes
-  if (abs(Config%epsilon(i)) < epsilon(1.0_rb)) then
-    model(i) = EmDee_pair_none()
-  else
-    model(i) = EmDee_pair_lj_sf( Config%epsilon(i)/mvv2e, Config%sigma(i) )
-  end if
-  call EmDee_set_pair_type( md, i, i, model(i) )
-end do
-do i = 1, maxval(Config%Mol)
-  indexes = pack( [(j,j=1,N)], Config%Mol == i )
-  call EmDee_add_rigid_body( md, size(indexes), c_loc(indexes) )
+do k = 1, Nlayers
+  call EmDee_switch_model_layer( md, k )
+
+  ! VALID ONLY FOR A NON-POLAR SOLUTE:
+  do i = 1, Config%ntypes-1
+    iInSolute = any(soluteType == i)
+    do j = i+1, Config%ntypes
+      jInSolute = any(soluteType == j)
+      if (iInSolute .or. jInSolute) then
+        if (iInSolute .and. jInSolute) then
+          model = EmDee_pair_none()
+        else if (isZero(Config%epsilon(i)).or.isZero(Config%epsilon(j))) then
+          model = EmDee_pair_none()
+        else
+          model = EmDee_pair_softcore_cut( sqrt(Config%epsilon(i)*Config%epsilon(j))/mvv2e, &
+                                           half*(Config%sigma(i) + Config%sigma(j)), lambda(k) )
+        end if
+        call EmDee_set_pair_type( md, i, j, model )
+      end if
+    end do
+  end do
+
+  do i = 1, Config%ntypes
+    if (any(soluteType == i)) then
+      model = EmDee_pair_none()
+    else if (isZero(Config%epsilon(i))) then
+      model = EmDee_pair_coul_sf()
+    else
+      model = EmDee_pair_lj_sf_coul_sf( Config%epsilon(i)/mvv2e, Config%sigma(i) )
+    end if
+    call EmDee_set_pair_type( md, i, i, model )
+  end do
+
 end do
 call EmDee_set_charges( md, c_loc(charges) )
+call EmDee_switch_model_layer( md, layer )
+
+do i = 1, maxval(Config%Mol)
+  indexes = pack( [(j,j=1,N)], Config%Mol == i )
+  if (size(indexes) > 1) call EmDee_add_rigid_body( md, size(indexes), c_loc(indexes) )
+end do
+
 call EmDee_upload( md, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
 call EmDee_random_momenta( md, kT, 1, seed )
 call Config % Save_XYZ( trim(Base)//".xyz" )
@@ -72,41 +114,41 @@ call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_n
 step = 0
 call writeln( properties() )
 do step = 1, NEquil
-  select case (method)
-    case (0); call Verlet_Step
-    case (1); call Pscaling_Step
-    case (2); call Boosting_Step
-  end select
+  call Pscaling_Step
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
-call Report( NEquil )
+call Report
 
 call writeln( )
 call writeln( "Memory usage" )
-call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc" )
-step = NEquil
-call writeln( properties() )
-do step = NEquil+1, NEquil+NProd
-  select case (method)
-    case (0); call Verlet_Step
-    case (1); call Pscaling_Step
-    case (2); call Boosting_Step
-  end select
+call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc node", &
+              join([("E"//int2str(i),i=1,Nlayers)]) )
+allocate( energy(Nlayers) )
+step = 0
+call EmDee_group_energy( md, Natoms, c_loc(solute_atoms), c_loc(energy) )
+call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
+
+do step = 1, NProd
+  call Pscaling_Step
   if (mod(step,Nconf)==0) then
     call EmDee_download( md, c_null_ptr, c_loc(Config%R), c_null_ptr, c_null_ptr )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
   end if
-  if (mod(step,thermo) == 0) call writeln( properties() )
+  if (mod(step,thermo) == 0) then
+!print*, "entrando..."
+    call EmDee_group_energy( md, Natoms, c_loc(solute_atoms), c_loc(energy) )
+!print*, "external = ", energy
+    call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
+  end if
 end do
-call Report( NProd )
+call Report
 
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
 contains
   !-------------------------------------------------------------------------------------------------
-  subroutine Report( Ntotal )
-    integer, intent(in) :: Ntotal
+  subroutine Report( )
     call writeln( "Loop time of", real2str(md%totalTime), "s." )
     call writeln()
     call writeln( "Pair time  =", real2str(md%pairTime), "s." )
@@ -116,8 +158,7 @@ contains
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
-    real(rb) :: Temp
-    real(rb) :: Etotal
+    real(rb) :: Temp, Etotal
     Temp = (md%Kinetic/KE_sp)*T
     Etotal = md%Potential + md%Kinetic
     properties = trim(adjustl(int2str(step))) // " " // &
@@ -154,7 +195,7 @@ contains
   !-------------------------------------------------------------------------------------------------
   subroutine Read_Specifications( file )
     character(*), intent(in) :: file
-    integer :: inp
+    integer :: inp, n
     open( newunit=inp, file = file, status = "old" )
     read(inp,*); read(inp,*) Base
     read(inp,*); read(inp,*) configFile
@@ -167,10 +208,16 @@ contains
     read(inp,*); read(inp,*) Nconf
     read(inp,*); read(inp,*) thermo
     read(inp,*); read(inp,*) Nequil, Nprod
-    read(inp,*); read(inp,*) method
     read(inp,*); read(inp,*) ndamp, M, nloops
-    read(inp,*); read(inp,*)
     read(inp,*); read(inp,*) rotationMode
+    read(inp,*); read(inp,*) n
+    allocate( soluteType(n) )
+    read(inp,*); read(inp,*) soluteType
+    read(inp,*); read(inp,*) Nlayers
+    allocate( lambda(Nlayers), eta(Nlayers) )
+    read(inp,*); read(inp,*) lambda
+    read(inp,*); read(inp,*) eta
+    read(inp,*); read(inp,*) layer
     close(inp)
     call init_log( trim(Base)//".log" )
     call writeln()
@@ -186,12 +233,11 @@ contains
     call writeln( "Interval for printing properties:", int2str(thermo) )
     call writeln( "Number of equilibration steps:", int2str(Nequil) )
     call writeln( "Number of production steps:", int2str(Nprod) )
-    call writeln( "Thermostat method:", int2str(method) )
     call writeln( "Thermostat parameters:", int2str(ndamp), int2str(M), int2str(nloops) )
     if (rotationMode == 0) then
       call writeln( "Rotation mode: exact solution" )
     else
-      call writeln( "Rotation mode: Miller with", int2str(rotationMode), "RESPA steps" )
+      call writeln( "Rotation mode: Miller with", int2str(rotationMode), "respa steps" )
     end if
     call writeln()
   end subroutine Read_Specifications
@@ -213,39 +259,17 @@ contains
     KE_sp = half*dof*kT
     Volume = Lx*Ly*Lz
     call random % setup( seed )
-    select case (method)
-      case (0,1); allocate( nhc_pscaling :: thermostat )
-      case (2); allocate( nhc_boosting :: thermostat )
-      case default; call error( "unknown thermostat method" )
-    end select
     call thermostat % setup( M, kT, ndamp*dt, 6*NB-3, nloops )
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
-  subroutine Verlet_Step
-    call EmDee_boost( md, one, zero, dt_2 )
-    call EmDee_move( md, one, zero, dt )
-    call EmDee_boost( md, one, zero, dt_2 )
-  end subroutine Verlet_Step
-  !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
-   call thermostat % integrate( dt_2, two*md%Kinetic )
-   call EmDee_boost( md, zero, thermostat%damping, dt_2 )
-   call EmDee_boost( md, one, zero, dt_2 )
-   call EmDee_move( md, one, zero, dt )
-   call EmDee_boost( md, one, zero, dt_2 )
-   call thermostat % integrate( dt_2, two*md%Kinetic )
-   call EmDee_boost( md, zero, thermostat%damping, dt_2 )
-  end subroutine Pscaling_Step
-  !-------------------------------------------------------------------------------------------------
-  subroutine Boosting_Step
-    real(rb) :: alpha
     call thermostat % integrate( dt_2, two*md%Kinetic )
-    alpha = thermostat%p(1)*thermostat%InvQ(1)
-    call EmDee_boost( md, one, alpha, dt_2 )
+    call EmDee_boost( md, zero, thermostat%damping, dt_2 )
+    call EmDee_boost( md, one, zero, dt_2 )
     call EmDee_move( md, one, zero, dt )
-    thermostat%eta(1) = thermostat%eta(1) + alpha*dt
-    call EmDee_boost( md, one, alpha, dt_2 )
+    call EmDee_boost( md, one, zero, dt_2 )
     call thermostat % integrate( dt_2, two*md%Kinetic )
-  end subroutine Boosting_Step
+    call EmDee_boost( md, zero, thermostat%damping, dt_2 )
+  end subroutine Pscaling_Step
   !-------------------------------------------------------------------------------------------------
 end program expanded_ensemble
