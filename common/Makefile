@@ -11,10 +11,7 @@ lib: $(LIBFILE)
 $(LIBFILE): $(OBJS)
 	ar -cr $(LIBFILE) $(OBJS)
 
-%.o: %.f90
-	$(FORT) $(FLAGS) -c -o $@ $<
-
-mThermostat.o: mThermostat.f90 mGlobal.o
+%.o: %.f90 mGlobal.o
 	$(FORT) $(FLAGS) -c -o $@ $<
 
 mGlobal.o: mGlobal.f90
