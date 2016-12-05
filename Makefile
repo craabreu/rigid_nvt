@@ -1,7 +1,7 @@
 # Compilers and their basic options:
 FORT = gfortran
 
-BASIC_OPTS = -march=native -m64 -fPIC -fopenmp -cpp -fmax-errors=1
+BASIC_OPTS = -march=native -m64 -fopenmp -cpp -fmax-errors=1
 BASIC_OPTS += -Wall -Wno-maybe-uninitialized
 FAST_OPTS = -Ofast
 DEBUG_OPTS = -g -Og -fcheck=all -Ddebug

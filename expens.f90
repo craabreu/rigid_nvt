@@ -139,7 +139,7 @@ end do
 call Report
 
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
-call stats % save( trim(Base)//"_stats.csv" )
+call stats % save( trim(Base)//"_stats.csv", lambda, eta )
 call stop_log
 
 contains

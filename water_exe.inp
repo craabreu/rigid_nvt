@@ -19,7 +19,7 @@ water_vol.lmp
 [Intervalo para gravação de propriedades]
 20
 [Passos de equilibração e de produção]
-5000 50000
+500 500
 [Parâmetros do termostato: ndamp, nchain, nloops]
 100 6 10
 [Modo de rotação: 0 - Solução exata; n > 0 - Miller com n passos RESPA]

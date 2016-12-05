@@ -99,21 +99,30 @@ contains
 
 !===================================================================================================
 
-  subroutine SamplingStats_save( me, file )
-    class(SamplingStats), intent(inout) :: me
-    character(*),         intent(in)    :: file
+  subroutine SamplingStats_save( me, file, lambda, eta )
+    class(SamplingStats), intent(inout)        :: me
+    character(*),         intent(in)           :: file
+    real(rb),             intent(in), optional :: lambda(me%NS), eta(me%NS)
 
-    integer  :: unit, state, i
+    integer  :: unit, i
     character(sl) :: process(2) = ["RoundTrip   ","DownhillWalk"]
-    real(rb) :: avg, stdev
+    real(rb) :: f, avg, stdev
 
     open( unit = unit, file = file, status = "replace" )
-    write(unit,'("state,N(state),f(state)")')
-    do state = 1, me%NS
-      write(unit,'(A)') trim(join([ int2str(state),         &
-                                    real2str(me%H(state)),  &
-                                    real2str(me%Hdn(state)/me%H(state)) ],","))
-    end do
+    if (present(lambda).and.present(eta)) then
+      write(unit,'("state,lambda,eta,H,Hdown,f")')
+      do i = 1, me%NS
+        f = me%Hdn(i)/me%H(i)
+        write(unit,'(A)') trim(join([int2str(i), &
+                                     real2str([lambda(i),eta(i),me%H(i),me%Hdn(i),f])],","))
+      end do
+    else
+      write(unit,'("state,H,Hdown,f")')
+      do i = 1, me%NS
+        f = me%Hdn(i)/me%H(i)
+        write(unit,'(A)') trim(join([int2str(i),real2str([me%H(i),me%Hdn(i),f])],","))
+      end do
+    end if
 
     write(unit,'(/,"Process,Average,StDev")')
     do i = 1, 2
