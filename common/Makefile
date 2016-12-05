@@ -11,13 +11,7 @@ lib: $(LIBFILE)
 $(LIBFILE): $(OBJS)
 	ar -cr $(LIBFILE) $(OBJS)
 
-EmDee.o: EmDee.f90
-	$(FORT) $(FLAGS) -c -o $@ $<
-
-mRandom.o: mRandom.f90
-	$(FORT) $(FLAGS) -c -o $@ $<
-
-mConfig.o: mConfig.f90 mGlobal.o
+%.o: %.f90
 	$(FORT) $(FLAGS) -c -o $@ $<
 
 mThermostat.o: mThermostat.f90 mGlobal.o

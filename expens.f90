@@ -4,6 +4,7 @@ use mGlobal
 use mConfig
 use mRandom
 use mThermostat
+use mSamplingStats
 use iso_c_binding
 
 implicit none
@@ -18,7 +19,7 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 ! Simulation specifications:
 character(sl) :: Base
 integer       :: i, j, k, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
-real(rb)      :: T, Rc, dt, skin
+real(rb)      :: T, Rc, dt, skin, beta
 
 ! System properties:
 integer  :: dof
@@ -30,10 +31,10 @@ type(nhc_pscaling) :: thermostat
 
 ! Expanded ensemble variables:
 logical :: iInSolute, jInSolute
-integer :: Nlayers, Natoms, layer
+integer :: Nlayers, layer
+logical,  pointer :: inSolute(:)
 integer,  allocatable :: soluteType(:)
 real(rb), allocatable :: lambda(:), eta(:)
-integer,  pointer :: solute_atoms(:)
 real(rb), pointer :: energy(:)
 
 ! Other variables:
@@ -49,6 +50,7 @@ integer, allocatable, target :: indexes(:)
 type(tEmDee) :: md
 type(c_ptr) :: model
 type(kiss) :: random
+type(SamplingStats) :: stats
 
 ! Executable code:
 call Get_Command_Line_Args( threads, filename )
@@ -58,8 +60,8 @@ call Config % Read( configFile )
 call Setup_Simulation
 
 if (.not.allocated( Config%epsilon )) call error( "Pair coefficients were not found" )
-solute_atoms = pack( [(i,i=1,N)], [(any(soluteType == Config%Type(i)),i=1,N)] )
-Natoms = size(solute_atoms)
+allocate( inSolute(N) )
+inSolute = [(any(soluteType == Config%Type(i)),i=1,N)]
 
 md = EmDee_system( threads, Nlayers, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
 md%Options%rotationMode = rotationMode
@@ -110,12 +112,14 @@ call EmDee_upload( md, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr
 call EmDee_random_momenta( md, kT, 1, seed )
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
-call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc" )
+call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc node", &
+              join([("E"//int2str(i),i=1,Nlayers)]) )
+allocate( energy(Nlayers) )
 step = 0
 call writeln( properties() )
 do step = 1, NEquil
   call Pscaling_Step
-  if (mod(step,thermo) == 0) call writeln( properties() )
+  call Periodic_Tasks( step )
 end do
 call Report
 
@@ -123,30 +127,48 @@ call writeln( )
 call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc node", &
               join([("E"//int2str(i),i=1,Nlayers)]) )
-allocate( energy(Nlayers) )
 step = 0
-call EmDee_group_energy( md, Natoms, c_loc(solute_atoms), c_loc(energy) )
+call EmDee_group_energy( md, c_loc(inSolute), c_loc(energy) )
 call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
 
+call stats % initialize( Nlayers )
 do step = 1, NProd
   call Pscaling_Step
-  if (mod(step,Nconf)==0) then
-    call EmDee_download( md, c_null_ptr, c_loc(Config%R), c_null_ptr, c_null_ptr )
-    call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
-  end if
-  if (mod(step,thermo) == 0) then
-!print*, "entrando..."
-    call EmDee_group_energy( md, Natoms, c_loc(solute_atoms), c_loc(energy) )
-!print*, "external = ", energy
-    call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
-  end if
+  call Periodic_Tasks( step )
 end do
 call Report
 
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
+call stats % save( trim(Base)//"_stats.csv" )
 call stop_log
 
 contains
+  !-------------------------------------------------------------------------------------------------
+  subroutine Periodic_Tasks( step )
+    integer, intent(in) :: step
+
+    logical  :: print_props
+    integer  :: newLayer
+    real(rb) :: u(Nlayers)
+
+    print_props = mod(step,thermo) == 0
+    if (print_props) then
+      call EmDee_group_energy( md, c_loc(inSolute), c_loc(energy) )
+      call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
+    end if
+
+    if (mod(step,MDsteps) == 0) then
+      if (.not.print_props) call EmDee_group_energy( md, c_loc(inSolute), c_loc(energy) )
+      u = eta - beta*energy
+      newLayer = random % label( exp(u - maxval(u)) )
+      if (newLayer /= layer) then
+        layer = newLayer
+        call EmDee_switch_model_layer( md, layer )
+      end if
+      if (stats % initialized) call stats % sample( layer )
+    end if
+
+  end subroutine Periodic_Tasks
   !-------------------------------------------------------------------------------------------------
   subroutine Report( )
     call writeln( "Loop time of", real2str(md%totalTime), "s." )
@@ -256,6 +278,7 @@ contains
     NB = maxval(Config%Mol)
     dof = 6*NB - 3
     kT = kB*T
+    beta = one/kT
     KE_sp = half*dof*kT
     Volume = Lx*Ly*Lz
     call random % setup( seed )
@@ -271,5 +294,8 @@ contains
     call thermostat % integrate( dt_2, two*md%Kinetic )
     call EmDee_boost( md, zero, thermostat%damping, dt_2 )
   end subroutine Pscaling_Step
+  !-------------------------------------------------------------------------------------------------
+  subroutine Attempt_Lambda_Change
+  end subroutine Attempt_Lambda_Change
   !-------------------------------------------------------------------------------------------------
 end program expanded_ensemble

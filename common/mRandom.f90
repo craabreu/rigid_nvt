@@ -60,6 +60,11 @@ type, abstract :: i32rng
     !! @param[in] n (integer) the size of the sequence to be generated.
     procedure :: sequence => i32rng_sequence
 
+    !> Picks a random label according to a given array of probabilities.
+    !! @param[in] P (real array) Probability distribution of labels from 1 to N, where N is the
+    !!            number of entries in P. Note: the distribution does not have to be normalized.
+    procedure :: label => i32rng_label
+
 end type i32rng
 
 private :: i32rng_init, i32rng_i32
@@ -252,6 +257,21 @@ contains
       m = m - 1
     end do
   end function i32rng_sequence
+  !-----------------------------------------------------------------------------
+  function i32rng_label( a, P ) result( k )
+    class(i32rng), intent(inout) :: a
+    real(8),       intent(in)    :: P(:)
+    integer                      :: k
+    real(8) :: r, acc, pi(size(P))
+    pi = P/sum(P)
+    r = a%uniform()
+    k = 1
+    acc = pi(1)
+    do while (r > acc)
+      k = k + 1
+      acc = acc + pi(k)
+    end do
+  end function i32rng_label
   !-----------------------------------------------------------------------------
   !                                  SHR3
   !-----------------------------------------------------------------------------

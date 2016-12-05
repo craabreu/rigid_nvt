@@ -10,7 +10,7 @@ water_vol.lmp
 2345
 [Passo de integração (fs)]
 1.0
-[Número de passos de MD por passo de MC]
+[Número de passos de MD entre mudanças de lambda]
 10
 [Distância extra para lista de vizinhos (Å)]
 2
@@ -19,7 +19,7 @@ water_vol.lmp
 [Intervalo para gravação de propriedades]
 20
 [Passos de equilibração e de produção]
-0 50000
+5000 50000
 [Parâmetros do termostato: ndamp, nchain, nloops]
 100 6 10
 [Modo de rotação: 0 - Solução exata; n > 0 - Miller com n passos RESPA]
