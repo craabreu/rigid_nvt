@@ -30,9 +30,8 @@ integer :: M, ndamp, nloops
 type(nhc_pscaling) :: thermostat
 
 ! Expanded ensemble variables:
-logical :: iInSolute, jInSolute
+logical :: iInSolute
 integer :: Nlayers, layer
-logical,  pointer :: inSolute(:)
 integer,  allocatable :: soluteType(:)
 real(rb), allocatable :: lambda(:), eta(:)
 real(rb), pointer :: energy(:)
@@ -49,6 +48,7 @@ integer :: threads
 integer, allocatable, target :: indexes(:)
 type(tEmDee) :: md
 type(c_ptr) :: model
+type(c_ptr), allocatable :: multimodel(:)
 type(kiss) :: random
 type(SamplingStats) :: stats
 
@@ -60,46 +60,39 @@ call Config % Read( configFile )
 call Setup_Simulation
 
 if (.not.allocated( Config%epsilon )) call error( "Pair coefficients were not found" )
-allocate( inSolute(N) )
-inSolute = [(any(soluteType == Config%Type(i)),i=1,N)]
 
 md = EmDee_system( threads, Nlayers, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
 md%Options%rotationMode = rotationMode
+call c_f_pointer( md%layerEnergy, energy, [Nlayers] )
 
-do k = 1, Nlayers
-  call EmDee_switch_model_layer( md, k )
-
-  ! VALID ONLY FOR A NON-POLAR SOLUTE:
-  do i = 1, Config%ntypes-1
-    iInSolute = any(soluteType == i)
-    do j = i+1, Config%ntypes
-      jInSolute = any(soluteType == j)
-      if (iInSolute .or. jInSolute) then
-        if (iInSolute .and. jInSolute) then
-          model = EmDee_pair_none()
-        else if (isZero(Config%epsilon(i)).or.isZero(Config%epsilon(j))) then
-          model = EmDee_pair_none()
-        else
-          model = EmDee_pair_softcore_cut( sqrt(Config%epsilon(i)*Config%epsilon(j))/mvv2e, &
-                                           half*(Config%sigma(i) + Config%sigma(j)), lambda(k) )
-        end if
-        call EmDee_set_pair_type( md, i, j, model )
-      end if
-    end do
-  end do
-
-  do i = 1, Config%ntypes
-    if (any(soluteType == i)) then
-      model = EmDee_pair_none()
-    else if (isZero(Config%epsilon(i))) then
+do i = 1, Config%ntypes
+  if (.not.any(soluteType == i)) then
+    if (isZero(Config%epsilon(i))) then
       model = EmDee_pair_coul_sf()
     else
       model = EmDee_pair_lj_sf_coul_sf( Config%epsilon(i)/mvv2e, Config%sigma(i) )
     end if
-    call EmDee_set_pair_type( md, i, i, model )
-  end do
-
+    call EmDee_set_pair_model( md, i, i, model )
+  end if
 end do
+
+! VALID ONLY FOR A NON-POLAR SOLUTE:
+allocate( multimodel(Nlayers) )
+do i = 1, Config%ntypes-1
+  iInSolute = any(soluteType == i)
+  do j = i+1, Config%ntypes
+    if (.not.( (iInSolute .eqv. any(soluteType == j)) .or. &
+               isZero(Config%epsilon(i))   .or. &
+               isZero(Config%epsilon(j))        )) then
+      do k = 1, Nlayers
+        multimodel(k) = EmDee_pair_softcore_cut( sqrt(Config%epsilon(i)*Config%epsilon(j))/mvv2e, &
+                                         half*(Config%sigma(i) + Config%sigma(j)), lambda(k) )
+      end do
+      call EmDee_set_pair_multimodel( md, i, j, multimodel )
+    end if
+  end do
+end do
+
 call EmDee_set_charges( md, c_loc(charges) )
 call EmDee_switch_model_layer( md, layer )
 
@@ -114,7 +107,6 @@ call Config % Save_XYZ( trim(Base)//".xyz" )
 
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc node", &
               join([("E"//int2str(i),i=1,Nlayers)]) )
-allocate( energy(Nlayers) )
 step = 0
 call writeln( properties() )
 do step = 1, NEquil
@@ -128,7 +120,6 @@ call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc node", &
               join([("E"//int2str(i),i=1,Nlayers)]) )
 step = 0
-call EmDee_group_energy( md, c_loc(inSolute), c_loc(energy) )
 call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
 
 call stats % initialize( Nlayers )
@@ -153,12 +144,10 @@ contains
 
     print_props = mod(step,thermo) == 0
     if (print_props) then
-      call EmDee_group_energy( md, c_loc(inSolute), c_loc(energy) )
       call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
     end if
 
     if (mod(step,MDsteps) == 0) then
-      if (.not.print_props) call EmDee_group_energy( md, c_loc(inSolute), c_loc(energy) )
       u = eta - beta*energy
       newLayer = random % label( exp(u - maxval(u)) )
       if (newLayer /= layer) then
