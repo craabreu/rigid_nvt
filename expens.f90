@@ -1,3 +1,5 @@
+#include "emdee.f03"
+
 program expanded_ensemble
 
 use mGlobal
@@ -6,6 +8,7 @@ use mRandom
 use mThermostat
 use mSamplingStats
 use iso_c_binding
+use EmDee
 
 implicit none
 
@@ -42,10 +45,7 @@ real(rb) :: dt_2, dt_4, KE_sp, kT
 real(rb), pointer :: charges(:)
 character(256) :: filename, configFile
 
-#include "emdee.f03"
-
 integer :: threads
-integer, allocatable, target :: indexes(:)
 type(tEmDee) :: md
 type(c_ptr) :: model
 type(c_ptr), allocatable :: multimodel(:)
@@ -61,18 +61,19 @@ call Setup_Simulation
 
 if (.not.allocated( Config%epsilon )) call error( "Pair coefficients were not found" )
 
-md = EmDee_system( threads, Nlayers, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
+md = EmDee_system( threads, Nlayers, Rc, skin, Config%natoms, &
+                   c_loc(Config%Type), c_loc(Config%mass), c_loc(Config%Mol) )
 md%Options%rotationMode = rotationMode
-call c_f_pointer( md%layerEnergy, energy, [Nlayers] )
+allocate( energy(Nlayers) )
 
 do i = 1, Config%ntypes
   if (.not.any(soluteType == i)) then
     if (isZero(Config%epsilon(i))) then
-      model = EmDee_pair_coul_sf()
+      model = EmDee_pair_none()
     else
-      model = EmDee_pair_lj_sf_coul_sf( Config%epsilon(i)/mvv2e, Config%sigma(i) )
+      model = EmDee_pair_lj_sf( Config%epsilon(i)/mvv2e, Config%sigma(i) )
     end if
-    call EmDee_set_pair_model( md, i, i, model )
+    call EmDee_set_pair_model( md, i, i, model, 1.0_rb )
   end if
 end do
 
@@ -88,22 +89,19 @@ do i = 1, Config%ntypes-1
         multimodel(k) = EmDee_pair_softcore_cut( sqrt(Config%epsilon(i)*Config%epsilon(j))/mvv2e, &
                                          half*(Config%sigma(i) + Config%sigma(j)), lambda(k) )
       end do
-      call EmDee_set_pair_multimodel( md, i, j, multimodel )
+      call EmDee_set_pair_multimodel( md, i, j, multimodel, [(1.0_rb,k=1,Nlayers)] )
     end if
   end do
 end do
 
-call EmDee_set_charges( md, c_loc(charges) )
-call EmDee_switch_model_layer( md, layer )
+call EmDee_set_coul_model( md, EmDee_coul_sf() )
+call EmDee_upload( md, "charges"//c_null_char, c_loc(charges) )
 
-do i = 1, maxval(Config%Mol)
-  indexes = pack( [(j,j=1,N)], Config%Mol == i )
-  if (size(indexes) > 1) call EmDee_add_rigid_body( md, size(indexes), c_loc(indexes) )
-end do
-
-call EmDee_upload( md, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
-call EmDee_random_momenta( md, kT, 1, seed )
+call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
+call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
+call EmDee_random_momenta( md, kT, .true._1, seed )
 call Config % Save_XYZ( trim(Base)//".xyz" )
+call EmDee_switch_model_layer( md, layer )
 
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc node", &
               join([("E"//int2str(i),i=1,Nlayers)]) )
@@ -120,6 +118,7 @@ call writeln( "Memory usage" )
 call writeln( "Step Temp KinEng KinEng_t KinEng_r PotEng TotEng Virial Press H_nhc node", &
               join([("E"//int2str(i),i=1,Nlayers)]) )
 step = 0
+call EmDee_download( md, "multienergy"//c_null_char, c_loc(energy) )
 call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
 
 call stats % initialize( Nlayers )
@@ -144,10 +143,12 @@ contains
 
     print_props = mod(step,thermo) == 0
     if (print_props) then
+      call EmDee_download( md, "multienergy"//c_null_char, c_loc(energy) )
       call writeln( trim(properties())//" "//join([int2str(layer),real2str(mvv2e*energy)]) )
     end if
 
     if (mod(step,MDsteps) == 0) then
+      if (.not.print_props) call EmDee_download( md, "multienergy"//c_null_char, c_loc(energy) )
       u = eta - beta*energy
       newLayer = random % label( exp(u - maxval(u)) )
       if (newLayer /= layer) then
@@ -170,14 +171,14 @@ contains
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
     real(rb) :: Temp, Etotal
-    Temp = (md%Kinetic/KE_sp)*T
-    Etotal = md%Potential + md%Kinetic
+    Temp = (md%Energy%Kinetic/KE_sp)*T
+    Etotal = md%Energy%Potential + md%Energy%Kinetic
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
-                                 mvv2e*md%Kinetic, &
-                                 mvv2e*(md%Kinetic - md%Rotational), &
-                                 mvv2e*md%Rotational, &
-                                 mvv2e*md%Potential, &
+                                 mvv2e*md%Energy%Kinetic, &
+                                 mvv2e*(md%Energy%Kinetic - md%Energy%Rotational), &
+                                 mvv2e*md%Energy%Rotational, &
+                                 mvv2e*md%Energy%Potential, &
                                  mvv2e*Etotal, &
                                  mvv2e*md%Virial, &
                                  Pconv*((NB-1)*kB*Temp + md%Virial)/Volume, &
@@ -275,12 +276,12 @@ contains
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
-    call thermostat % integrate( dt_2, two*md%Kinetic )
+    call thermostat % integrate( dt_2, two*md%Energy%Kinetic )
     call EmDee_boost( md, zero, thermostat%damping, dt_2 )
     call EmDee_boost( md, one, zero, dt_2 )
     call EmDee_move( md, one, zero, dt )
     call EmDee_boost( md, one, zero, dt_2 )
-    call thermostat % integrate( dt_2, two*md%Kinetic )
+    call thermostat % integrate( dt_2, two*md%Energy%Kinetic )
     call EmDee_boost( md, zero, thermostat%damping, dt_2 )
   end subroutine Pscaling_Step
   !-------------------------------------------------------------------------------------------------

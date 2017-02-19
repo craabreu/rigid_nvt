@@ -1,3 +1,5 @@
+#include "emdee.f03"
+
 program lj_nvt
 
 use mGlobal
@@ -5,6 +7,7 @@ use mConfig
 use mRandom
 use mThermostat
 use iso_c_binding
+use EmDee
 
 implicit none
 
@@ -15,7 +18,7 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 
 ! Simulation specifications:
 character(sl) :: Base
-integer       :: i, j, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
+integer       :: i, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
 real(rb)      :: T, Rc, dt, skin
 
 ! System properties:
@@ -30,20 +33,16 @@ class(nhc), pointer :: thermostat(:)
 ! Other variables:
 integer  :: step
 real(rb) :: dt_2, dt_4, KE_sp, kT
-real(rb), pointer :: charges(:)
 character(256) :: filename, configFile
 
-#include "emdee.f03"
-
 integer :: threads
-integer, allocatable, target :: indexes(:)
 type(tEmDee) :: md
 type(c_ptr), allocatable :: model(:)
 type(kiss) :: random
 
-#define trans_rot md%Options%translate = 1; md%Options%rotate = 1
-#define transOnly md%Options%translate = 1; md%Options%rotate = 0
-#define rotOnly   md%Options%translate = 0; md%Options%rotate = 1
+#define trans_rot md%Options%translate = .true.;  md%Options%rotate = .true.
+#define transOnly md%Options%translate = .true.;  md%Options%rotate = .false.
+#define rotOnly   md%Options%translate = .false.; md%Options%rotate = .true.
 
 ! Executable code:
 #ifdef coul
@@ -58,7 +57,8 @@ call Read_Specifications( filename )
 call Config % Read( configFile )
 call Setup_Simulation
 
-md = EmDee_system( threads, 1, Rc, skin, Config%natoms, c_loc(Config%Type), c_loc(Config%mass) )
+md = EmDee_system( threads, 1, Rc, skin, Config%natoms, &
+                   c_loc(Config%Type), c_loc(Config%mass), c_loc(Config%Mol) )
 md%Options%rotationMode = rotationMode
 
 allocate( model(Config%ntypes) )
@@ -68,20 +68,19 @@ do i = 1, Config%ntypes
   else
     model(i) = EmDee_pair_lj_sf( Config%epsilon(i)/mvv2e, Config%sigma(i) )
   end if
-  call EmDee_set_pair_type( md, i, i, model(i) )
-end do
-do i = 1, maxval(Config%Mol)
-  indexes = pack( [(j,j=1,N)], Config%Mol == i )
-  if (size(indexes) > 1) call EmDee_add_rigid_body( md, size(indexes), c_loc(indexes) )
+  call EmDee_set_pair_model( md, i, i, model(i), kCoul )
 end do
 #ifdef coul
-  call EmDee_set_charges( md, c_loc(charges) )
+call EmDee_set_coul_model( md, EmDee_coul_sf() )
+call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
 #endif
-call EmDee_upload( md, c_loc(Config%Lx), c_loc(Config%R), c_null_ptr, c_null_ptr )
+call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
+call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
 call EmDee_random_momenta( md, kT, 1, seed )
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
-call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_1 KinEng_2 KinEng_3 PotEng TotEng Virial Press H_nhc" )
+call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_r1 KinEng_r2 KinEng_r3 "// &
+              "PotEng DispEng CoulEng TotEng Virial BodyVirial Press H_nhc" )
 step = 0
 call writeln( properties() )
 do step = 1, NEquil
@@ -95,11 +94,12 @@ do step = 1, NEquil
   end select
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
-call Report( NEquil )
+call Report
 
 call writeln( )
 call writeln( "Memory usage" )
-call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_1 KinEng_2 KinEng_3 PotEng TotEng Virial Press H_nhc" )
+call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_r1 KinEng_r2 KinEng_r3 "// &
+              "PotEng DispEng CoulEng TotEng Virial BodyVirial Press H_nhc" )
 step = NEquil
 call writeln( properties() )
 do step = NEquil+1, NEquil+NProd
@@ -112,20 +112,19 @@ do step = NEquil+1, NEquil+NProd
     case (5); call New_Hybrid_Step
   end select
   if (mod(step,Nconf)==0) then
-    call EmDee_download( md, c_null_ptr, c_loc(Config%R), c_null_ptr, c_null_ptr )
+    call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
   end if
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
-call Report( NProd )
+call Report
 
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
 contains
   !-------------------------------------------------------------------------------------------------
-  subroutine Report( Ntotal )
-    integer, intent(in) :: Ntotal
+  subroutine Report
     call writeln( "Loop time of", real2str(md%totalTime), "s." )
     call writeln()
     call writeln( "Pair time  =", real2str(md%pairTime), "s." )
@@ -137,21 +136,21 @@ contains
   character(sl) function properties()
     real(rb) :: Temp
     real(rb) :: Etotal
-    real(rb), target :: Kr(3)
-    Temp = (md%Kinetic/KE_sp)*T
-    Etotal = md%Potential + md%Kinetic
-    call EmDee_Rotational_Energies( md, Kr )
-    Kr = mvv2e*Kr
+    Temp = (md%Energy%Kinetic/KE_sp)*T
+    Etotal = md%Energy%Potential + md%Energy%Kinetic
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
-                                 mvv2e*md%Kinetic, &
-                                 mvv2e*(md%Kinetic - md%Rotational), &
-                                 mvv2e*md%Rotational, &
-                                 Kr, &
-                                 mvv2e*md%Potential, &
+                                 mvv2e*md%Energy%Kinetic, &
+                                 mvv2e*(md%Energy%Kinetic - md%Energy%Rotational), &
+                                 mvv2e*md%Energy%Rotational, &
+                                 mvv2e*md%Energy%RotPart, &
+                                 mvv2e*md%Energy%Potential, &
+                                 mvv2e*md%Energy%Dispersion, &
+                                 mvv2e*md%Energy%Coulomb, &
                                  mvv2e*Etotal, &
                                  mvv2e*md%Virial, &
-                                 Pconv*((NB-1)*kB*Temp + md%Virial)/Volume, &
+                                 mvv2e*md%BodyVirial, &
+                                 Pconv*((NB-1)*kB*Temp + (1.0_rb/3.0_rb)*md%Virial)/Volume, &
                                  mvv2e*(Etotal + sum(thermostat%energy())) ]))
   end function properties
   !-------------------------------------------------------------------------------------------------
@@ -223,8 +222,6 @@ contains
   subroutine Setup_Simulation
     real(rb) :: Lx, Ly, Lz
     N = Config % natoms
-    allocate( charges(N) )
-    charges = sqrt(kCoul)*Config%Charge
     Lx = Config % Lx
     Ly = Config % Ly
     Lz = Config % Lz
@@ -262,16 +259,16 @@ contains
   !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
     if (single) then
-      call thermostat(1) % integrate( dt_2, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
       call EmDee_boost( md, one, zero, dt_2 )
       call EmDee_move( md, one, zero, dt )
       call EmDee_boost( md, one, zero, dt_2 )
-      call thermostat(1) % integrate( dt_2, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
     else
-      call thermostat(1) % integrate( dt_2, two*(md%Kinetic - md%Rotational) )
-      call thermostat(2) % integrate( dt_2, two*md%Rotational )
+      call thermostat(1) % integrate( dt_2, two*(md%Energy%Kinetic - md%Energy%Rotational) )
+      call thermostat(2) % integrate( dt_2, two*md%Energy%Rotational )
       transOnly
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
       rotOnly
@@ -280,8 +277,8 @@ contains
       call EmDee_boost( md, one, zero, dt_2 )
       call EmDee_move( md, one, zero, dt )
       call EmDee_boost( md, one, zero, dt_2 )
-      call thermostat(1) % integrate( dt_2, two*(md%Kinetic - md%Rotational) )
-      call thermostat(2) % integrate( dt_2, two*md%Rotational )
+      call thermostat(1) % integrate( dt_2, two*(md%Energy%Kinetic - md%Energy%Rotational) )
+      call thermostat(2) % integrate( dt_2, two*md%Energy%Rotational )
       transOnly
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
       rotOnly
@@ -297,23 +294,23 @@ contains
     dt_4N = dt_4/nloops
     if (single) then
       do i = 1, nloops
-        call thermostat(1) % integrate( dt_4N, two*md%Kinetic )
+        call thermostat(1) % integrate( dt_4N, two*md%Energy%Kinetic )
         alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
         thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt_2N
         call EmDee_boost( md, one, alpha1, dt_2N )
-        call thermostat(1) % integrate( dt_4N, two*md%Kinetic )
+        call thermostat(1) % integrate( dt_4N, two*md%Energy%Kinetic )
       end do
       call EmDee_move( md, one, zero, dt )
       do i = 1, nloops
-        call thermostat(1) % integrate( dt_4N, two*md%Kinetic )
+        call thermostat(1) % integrate( dt_4N, two*md%Energy%Kinetic )
         alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
         thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt_2N
         call EmDee_boost( md, one, alpha1, dt_2N )
-        call thermostat(1) % integrate( dt_4N, two*md%Kinetic )
+        call thermostat(1) % integrate( dt_4N, two*md%Energy%Kinetic )
       end do
     else
       do i = 1, nloops
-        call thermostat % integrate( dt_4N, two*[md%Kinetic - md%Rotational, md%Rotational] )
+        call thermostat % integrate( dt_4N, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
         alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
         thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt_2N
         transOnly
@@ -322,12 +319,12 @@ contains
         thermostat(2)%eta(1) = thermostat(2)%eta(1) + alpha2*dt_2N
         rotOnly
         call EmDee_boost( md, one, alpha2, dt_2N )
-        call thermostat % integrate( dt_4N, two*[md%Kinetic - md%Rotational, md%Rotational] )
+        call thermostat % integrate( dt_4N, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       end do
       trans_rot
       call EmDee_move( md, one, zero, dt )
       do i = 1, nloops
-        call thermostat % integrate( dt_4N, two*[md%Kinetic - md%Rotational, md%Rotational] )
+        call thermostat % integrate( dt_4N, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
         alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
         thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt_2N
         transOnly
@@ -336,7 +333,7 @@ contains
         thermostat(2)%eta(1) = thermostat(2)%eta(1) + alpha2*dt_2N
         rotOnly
         call EmDee_boost( md, one, alpha2, dt_2N )
-        call thermostat % integrate( dt_4N, two*[md%Kinetic - md%Rotational, md%Rotational] )
+        call thermostat % integrate( dt_4N, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       end do
       trans_rot
     end if
@@ -344,25 +341,25 @@ contains
   !-------------------------------------------------------------------------------------------------
   subroutine Hybrid_Step
     if (single) then
-      call thermostat(1) % integrate( dt_4, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_4, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
 
       call EmDee_boost( md, one, zero, dt_2 )
 
-      call thermostat(1) % integrate( dt_4, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_4, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
 
       call EmDee_move( md, one, zero, dt )
 
-      call thermostat(1) % integrate( dt_4, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_4, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
 
       call EmDee_boost( md, one, zero, dt_2 )
 
-      call thermostat(1) % integrate( dt_4, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_4, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
     else
-      call thermostat % integrate( dt_4, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat % integrate( dt_4, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       transOnly
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
       rotOnly
@@ -371,7 +368,7 @@ contains
       trans_rot
       call EmDee_boost( md, one, zero, dt_2 )
 
-      call thermostat % integrate( dt_4, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat % integrate( dt_4, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       transOnly
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
       rotOnly
@@ -379,7 +376,7 @@ contains
 
       call EmDee_move( md, one, zero, dt )
 
-      call thermostat % integrate( dt_4, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat % integrate( dt_4, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       transOnly
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
       rotOnly
@@ -388,7 +385,7 @@ contains
       trans_rot
       call EmDee_boost( md, one, zero, dt_2 )
 
-      call thermostat % integrate( dt_4, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat % integrate( dt_4, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       transOnly
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
       rotOnly
@@ -400,15 +397,15 @@ contains
   subroutine Boosting_Step
     real(rb) :: alpha1, alpha2
     if (single) then
-      call thermostat(1) % integrate( dt_2, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
       call EmDee_boost( md, one, alpha1, dt_2 )
       call EmDee_move( md, one, zero, dt )
       thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt
       call EmDee_boost( md, one, alpha1, dt_2 )
-      call thermostat(1) % integrate( dt_2, two*md%Kinetic )
+      call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
     else
-      call thermostat % integrate( dt_2, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat % integrate( dt_2, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
       alpha2 = thermostat(2)%p(1)*thermostat(2)%InvQ(1)
       transOnly
@@ -423,7 +420,7 @@ contains
       call EmDee_boost( md, one, alpha1, dt_2 )
       rotOnly
       call EmDee_boost( md, one, alpha2, dt_2 )
-      call thermostat % integrate( dt_2, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat % integrate( dt_2, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       trans_rot
     end if
   end subroutine Boosting_Step
@@ -432,7 +429,7 @@ contains
     call EmDee_boost( md, one, zero, dt_2 )
     call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
     call EmDee_move( md, one, zero, dt )
-    call thermostat(1) % integrate( dt, two*md%Kinetic )
+    call thermostat(1) % integrate( dt, two*md%Energy%Kinetic )
     call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
     call EmDee_boost( md, one, zero, dt_2 )
   end subroutine Kamberaj_Single_Thermostat_Step
@@ -442,7 +439,7 @@ contains
     if (single) then
       call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
       call EmDee_move( md, one, zero, dt )
-      call thermostat(1) % integrate( dt, two*md%Kinetic )
+      call thermostat(1) % integrate( dt, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
     else
       transOnly
@@ -451,7 +448,7 @@ contains
       call EmDee_boost( md, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), dt_2 )
       trans_rot
       call EmDee_move( md, one, zero, dt )
-      call thermostat % integrate( dt, two*[md%Kinetic - md%Rotational, md%Rotational] )
+      call thermostat % integrate( dt, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       rotOnly
       call EmDee_boost( md, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), dt_2 )
       transOnly
