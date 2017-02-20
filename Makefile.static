@@ -1,5 +1,6 @@
 # Compilers and their basic options:
 FORT = gfortran -static-libgfortran
+EXECUTABLE ?= nvt
 
 BASIC_OPTS = -march=native -m64 -fopenmp -cpp -fmax-errors=1
 BASIC_OPTS += -Wall -Wno-maybe-uninitialized
@@ -15,7 +16,6 @@ endif
 #FLAGS = -fno-range-check -march=native -ffast-math -funroll-loops -fstrict-aliasing -O3 -Wunused -cpp -fopenmp
 COMMON = common
 SRCS = $(wildcard $(COMMON)/*.f90)
-EXECUTABLE ?= expens
 LIB = mscommon
 LIBFILE = $(COMMON)/lib$(LIB).a
 

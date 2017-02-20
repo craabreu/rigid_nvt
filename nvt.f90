@@ -76,7 +76,7 @@ call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
 #endif
 call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
 call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
-call EmDee_random_momenta( md, kT, 1, seed )
+call EmDee_random_momenta( md, kT, .true._1, seed )
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
 call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_r1 KinEng_r2 KinEng_r3 "// &
