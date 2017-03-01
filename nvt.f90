@@ -18,8 +18,8 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 
 ! Simulation specifications:
 character(sl) :: Base
-integer       :: i, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
-real(rb)      :: T, Rc, dt, skin
+integer       :: i, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode, Nrespa
+real(rb)      :: T, Rc, dt, skin, respaRc
 
 ! System properties:
 integer  :: dof
@@ -66,7 +66,7 @@ do i = 1, Config%ntypes
   if (abs(Config%epsilon(i)) < epsilon(1.0_rb)) then
     model(i) = EmDee_pair_none()
   else
-    model(i) = EmDee_pair_lj_sf( Config%epsilon(i)/mvv2e, Config%sigma(i) )
+    model(i) = EmDee_shifted_force( EmDee_pair_lj_cut( Config%epsilon(i)/mvv2e, Config%sigma(i) ) )
   end if
   call EmDee_set_pair_model( md, i, i, model(i), kCoul )
 end do
@@ -74,6 +74,9 @@ end do
 call EmDee_set_coul_model( md, EmDee_coul_sf() )
 call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
 #endif
+
+if (Nrespa > 0) call EmDee_set_respa( md, respaRc, Nrespa, 0 )
+
 call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
 call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
 call EmDee_random_momenta( md, kT, .true._1, seed )
@@ -193,6 +196,8 @@ contains
     read(inp,*); read(inp,*) ndamp, M, nloops
     read(inp,*); read(inp,*) nts
     read(inp,*); read(inp,*) rotationMode
+    read(inp,*); read(inp,*) Nrespa
+    read(inp,*); read(inp,*) respaRc
     close(inp)
     call init_log( trim(Base)//".log" )
     call writeln()
@@ -252,9 +257,10 @@ contains
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
   subroutine Verlet_Step
-    call EmDee_boost( md, one, zero, dt_2 )
-    call EmDee_move( md, one, zero, dt )
-    call EmDee_boost( md, one, zero, dt_2 )
+!    call EmDee_boost( md, one, zero, dt_2 )
+!    call EmDee_displace( md, one, zero, dt )
+!    call EmDee_boost( md, one, zero, dt_2 )
+    call EmDee_advance( md, zero, zero, dt )
   end subroutine Verlet_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
@@ -262,7 +268,7 @@ contains
       call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
       call EmDee_boost( md, one, zero, dt_2 )
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       call EmDee_boost( md, one, zero, dt_2 )
       call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
@@ -275,7 +281,7 @@ contains
       call EmDee_boost( md, zero, thermostat(2)%damping, dt_2 )
       trans_rot
       call EmDee_boost( md, one, zero, dt_2 )
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       call EmDee_boost( md, one, zero, dt_2 )
       call thermostat(1) % integrate( dt_2, two*(md%Energy%Kinetic - md%Energy%Rotational) )
       call thermostat(2) % integrate( dt_2, two*md%Energy%Rotational )
@@ -300,7 +306,7 @@ contains
         call EmDee_boost( md, one, alpha1, dt_2N )
         call thermostat(1) % integrate( dt_4N, two*md%Energy%Kinetic )
       end do
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       do i = 1, nloops
         call thermostat(1) % integrate( dt_4N, two*md%Energy%Kinetic )
         alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
@@ -322,7 +328,7 @@ contains
         call thermostat % integrate( dt_4N, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       end do
       trans_rot
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       do i = 1, nloops
         call thermostat % integrate( dt_4N, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
         alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
@@ -349,7 +355,7 @@ contains
       call thermostat(1) % integrate( dt_4, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
 
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
 
       call thermostat(1) % integrate( dt_4, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_4 )
@@ -374,7 +380,7 @@ contains
       rotOnly
       call EmDee_boost( md, zero, thermostat(2)%damping, dt_4 )
 
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
 
       call thermostat % integrate( dt_4, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       transOnly
@@ -400,7 +406,7 @@ contains
       call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       alpha1 = thermostat(1)%p(1)*thermostat(1)%InvQ(1)
       call EmDee_boost( md, one, alpha1, dt_2 )
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt
       call EmDee_boost( md, one, alpha1, dt_2 )
       call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
@@ -413,7 +419,7 @@ contains
       rotOnly
       call EmDee_boost( md, one, alpha2, dt_2 )
       trans_rot
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       thermostat(1)%eta(1) = thermostat(1)%eta(1) + alpha1*dt
       thermostat(2)%eta(1) = thermostat(2)%eta(1) + alpha2*dt
       transOnly
@@ -428,7 +434,7 @@ contains
   subroutine Kamberaj_Single_Thermostat_Step
     call EmDee_boost( md, one, zero, dt_2 )
     call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
-    call EmDee_move( md, one, zero, dt )
+    call EmDee_displace( md, one, zero, dt )
     call thermostat(1) % integrate( dt, two*md%Energy%Kinetic )
     call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
     call EmDee_boost( md, one, zero, dt_2 )
@@ -438,7 +444,7 @@ contains
     call EmDee_boost( md, one, zero, dt_2 )
     if (single) then
       call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       call thermostat(1) % integrate( dt, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%p(1)*thermostat(1)%InvQ(1), dt_2 )
     else
@@ -447,7 +453,7 @@ contains
       rotOnly
       call EmDee_boost( md, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), dt_2 )
       trans_rot
-      call EmDee_move( md, one, zero, dt )
+      call EmDee_displace( md, one, zero, dt )
       call thermostat % integrate( dt, two*[md%Energy%Kinetic - md%Energy%Rotational, md%Energy%Rotational] )
       rotOnly
       call EmDee_boost( md, zero, thermostat(2)%p(1)*thermostat(2)%InvQ(1), dt_2 )
