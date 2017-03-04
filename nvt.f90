@@ -128,10 +128,14 @@ call stop_log
 contains
   !-------------------------------------------------------------------------------------------------
   subroutine Report
-    call writeln( "Loop time of", real2str(md%totalTime), "s." )
+    real(rb) :: other
+    call writeln( "Loop time of", real2str(md%Time%Total), "s." )
     call writeln()
-    call writeln( "Pair time  =", real2str(md%pairTime), "s." )
-    call writeln( "Other time =", real2str(md%totalTime-md%pairTime), "s." )
+    call writeln( "Pair time      =", real2str(md%Time%Pair), "s." )
+    call writeln( "Fast Pair time =", real2str(md%Time%FastPair), "s." )
+    call writeln( "Neighbor time  =", real2str(md%Time%Neighbor), "s." )
+    other = md%Time%Total - (md%Time%Pair + md%Time%FastPair + md%Time%Neighbor)
+    call writeln( "Other time =", real2str(other), "s." )
     call writeln()
     call writeln( "Neighbor list builds =", int2str(md%builds) )
   end subroutine Report

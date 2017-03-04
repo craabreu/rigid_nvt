@@ -9,7 +9,7 @@ water.lmp
 [Semente para geração de números aleatórios]
 2345
 [Passo de integração (fs)]
-6.0
+4.0
 [Número de passos de MD por passo de MC]
 10
 [Distância extra para lista de vizinhos (Å)]
@@ -29,7 +29,7 @@ water.lmp
 [Rotation mode: 0 - Exact; n > 0 - Miller with n respa steps]
 0
 [Number of RESPA internal steps (0 = no RESPA)]
-0
+4
 [Internal cutoff for RESPA (Å)]
-4.5
+5.0
 
