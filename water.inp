@@ -30,6 +30,6 @@ water.lmp
 0
 [Number of RESPA internal steps (0 = no RESPA)]
 4
-[Internal cutoff for RESPA (Å)]
-5.0
+[Internal and external cutoff for RESPA (Å)]
+3.0 6.0
 

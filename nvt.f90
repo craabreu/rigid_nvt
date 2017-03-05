@@ -19,7 +19,7 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 ! Simulation specifications:
 character(sl) :: Base
 integer       :: i, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode, Nrespa
-real(rb)      :: T, Rc, dt, skin, respaRc
+real(rb)      :: T, Rc, dt, skin, InRc, ExRc
 
 ! System properties:
 integer  :: dof
@@ -75,7 +75,7 @@ call EmDee_set_coul_model( md, EmDee_coul_sf() )
 call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
 #endif
 
-if (Nrespa > 0) call EmDee_set_respa( md, respaRc, Nrespa, 0 )
+if (Nrespa > 0) call EmDee_set_respa( md, InRc, ExRc, Nrespa, 0 )
 
 call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
 call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
@@ -201,7 +201,7 @@ contains
     read(inp,*); read(inp,*) nts
     read(inp,*); read(inp,*) rotationMode
     read(inp,*); read(inp,*) Nrespa
-    read(inp,*); read(inp,*) respaRc
+    read(inp,*); read(inp,*) InRc, ExRc
     close(inp)
     call init_log( trim(Base)//".log" )
     call writeln()
