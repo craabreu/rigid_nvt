@@ -9,7 +9,7 @@ water.lmp
 [Semente para geração de números aleatórios]
 2345
 [Passo de integração (fs)]
-4.0
+2.0
 [Número de passos de MD por passo de MC]
 10
 [Distância extra para lista de vizinhos (Å)]
@@ -17,9 +17,9 @@ water.lmp
 [Intervalo para gravação de configurações]
 1000000
 [Intervalo para gravação de propriedades]
-20
+10
 [Passos de equilibração e de produção]
-5000 5000
+0 1000
 [Método de termostato: 0) NVE; 1) P-scaling; 2) Boosting; 3) Kamberaj; 4) Hybrid; 5) New_Hybrid]
 0
 [Parâmetros do termostato: ndamp, nchain, nloops]
@@ -29,7 +29,14 @@ water.lmp
 [Rotation mode: 0 - Exact; n > 0 - Miller with n respa steps]
 0
 [Number of RESPA internal steps (0 = no RESPA)]
-4
+0
 [Internal and external cutoff for RESPA (Å)]
 3.0 6.0
-
+[Compute MSD: 0 - No; 1 - Yes - Parâmetros = nevery blocksize nfreq]
+1 10 10 100
+[Compute DIPOLE:0 - No; 1 - Yes - Parâmetros = nevery blocksize nfreq]
+1 10 20 100
+[Compute rdf: number of pairs]
+2
+[Compute rdf: 0 - No; 1 - Yes - - Parâmetros = nevery nfreq bins itypes jtypes]
+1 50 1000 50 1 1 1 2

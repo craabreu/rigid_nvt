@@ -8,6 +8,7 @@ use mRandom
 use mThermostat
 use iso_c_binding
 use EmDee
+use mCorrelate
 
 implicit none
 
@@ -30,6 +31,20 @@ integer :: method, M, ndamp, nloops, nts
 logical :: single
 class(nhc), pointer :: thermostat(:)
 
+! Mean Square Displacement variables: 
+real(rb), pointer :: Rcm(:,:)
+integer :: DoMsd, nevery, blocksize, nfreq
+
+!Dipole moment variables:
+integer :: DoDipole, Dnevery, Dblocksize, Dnfreq, NP
+real(rb), pointer :: q(:,:), R(:,:)
+real(rb), allocatable :: mu(:,:), theta(:,:) 
+
+!Radial distribution function variables:
+integer :: DoRdf, Gnevery, Rnfreq, bins, npairs, counter
+real(rb), allocatable :: gr(:,:), rdf(:,:)
+integer , allocatable :: itype(:), jtype(:)
+
 ! Other variables:
 integer  :: step
 real(rb) :: dt_2, dt_4, KE_sp, kT
@@ -39,7 +54,9 @@ integer :: threads
 type(tEmDee) :: md
 type(c_ptr), allocatable :: model(:)
 type(kiss) :: random
-
+type(tMSD) :: MSD
+type(tACF) :: ACF
+integer :: out
 #define trans_rot md%Options%translate = .true.;  md%Options%rotate = .true.
 #define transOnly md%Options%translate = .true.;  md%Options%rotate = .false.
 #define rotOnly   md%Options%translate = .false.; md%Options%rotate = .true.
@@ -105,6 +122,40 @@ call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_r1 KinEng_r2 KinEng_r3 
               "PotEng DispEng CoulEng TotEng Virial BodyVirial Press H_nhc" )
 step = NEquil
 call writeln( properties() )
+
+if (DoMsd == 1) then
+  allocate(Rcm(3,NB)) 
+  call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm) )  
+  call MSD % setup( nevery, blocksize, Nprod, Rcm )
+  open(newunit = out, file = trim(Base)//".msd", status = "replace")
+  close(out)
+end if
+
+if (DoDipole == 1) then
+  allocate(q(4,NB)) 
+  allocate(R(3,N)) 
+  allocate(mu(3,NB)) 
+  allocate(theta(3,NB)) 
+  NP = N/NB  
+  call EmDee_download( md, "coordinates"//c_null_char, c_loc(R) )
+  call EmDee_download(md, "quaternions"//c_null_char, c_loc(q))
+  call ComputeTheta
+  call ACF % setup( Dnevery, Dblocksize, Nprod, mu )
+  open(newunit = out, file = trim(Base)//".dipole", status = "replace")
+  close(out)
+end if
+
+
+if (DoRdf == 1) then 
+  allocate(gr(bins,npairs), source = 0.0_rb) 
+  allocate(rdf(bins,npairs), source = 0.0_rb)
+  open(newunit = out, file = trim(Base)//".rdf", status = "replace")
+  counter = 1   
+  call EmDee_rdf(md, bins, npairs, itype, jtype, rdf)
+  gr = rdf
+  close(out)
+end if
+
 do step = NEquil+1, NEquil+NProd
   select case (method)
     case (0); call Verlet_Step
@@ -118,7 +169,32 @@ do step = NEquil+1, NEquil+NProd
     call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
   end if
-  if (mod(step,thermo) == 0) call writeln( properties() )
+  if (DoMSD == 1 .AND. mod(step,thermo) == 0) call writeln( properties() )
+  if (mod(step,nevery) == 0)  then 
+    call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm) )
+    call MSD % sample( Rcm ) 
+    if (mod(step,nfreq) == 0) then
+      call MSD % save( trim(Base)//".msd", append = .true. )
+    end if
+  end if
+  if (DoDipole == 1 .AND. mod(step,Dnevery) == 0)  then 
+    call EmDee_download(md, "quaternions"//c_null_char, c_loc(q))
+    call ComputeMu
+    call ACF % sample( mu ) 
+    if (mod(step,Dnfreq) == 0) then
+      call ACF % save( trim(Base)//".dipole", append = .true. )
+    end if
+  end if
+  if (DoRdf == 1 .AND. mod(step,Gnevery) == 0)  then 
+    call EmDee_rdf(md, bins, npairs, itype, jtype, rdf)
+    gr = gr + rdf
+    counter = counter + 1   
+    if (mod(step,Rnfreq) == 0) then
+      call rdf_save_to_file( trim(Base)//".rdf", append = .true. )
+    end if
+  end if
+
+
 end do
 call Report
 
@@ -183,7 +259,7 @@ contains
   !-------------------------------------------------------------------------------------------------
   subroutine Read_Specifications( file )
     character(*), intent(in) :: file
-    integer :: inp
+    integer :: inp, i
     open( newunit=inp, file = file, status = "old" )
     read(inp,*); read(inp,*) Base
     read(inp,*); read(inp,*) configFile
@@ -202,6 +278,11 @@ contains
     read(inp,*); read(inp,*) rotationMode
     read(inp,*); read(inp,*) Nrespa
     read(inp,*); read(inp,*) InRc, ExRc
+    read(inp,*); read(inp,*) DoMSD, nevery, blocksize, nfreq
+    read(inp,*); read(inp,*) DoDipole, Dnevery, Dblocksize, Dnfreq
+    read(inp,*); read(inp,*) npairs
+    allocate( itype(npairs), jtype(npairs) )
+    read(inp,*); read(inp,*) DoRdf, Gnevery, Rnfreq, bins, (itype(i),jtype(i),i=1,npairs)
     close(inp)
     call init_log( trim(Base)//".log" )
     call writeln()
@@ -224,7 +305,7 @@ contains
       call writeln( "Rotation mode: exact solution" )
     else
       call writeln( "Rotation mode: Miller with", int2str(rotationMode), "respa steps" )
-    end if
+    end if   
     call writeln()
   end subroutine Read_Specifications
   !-------------------------------------------------------------------------------------------------
@@ -467,5 +548,95 @@ contains
     end if
     call EmDee_boost( md, one, zero, dt_2 )
   end subroutine Kamberaj_Step
-  !-------------------------------------------------------------------------------------------------
+!-----------------------------------------------------------------------------------------------------
+  subroutine ComputeTheta
+    integer :: ind, i, j
+    real(rb) :: A(3,3)
+    ind = 1
+    do i = 1, NB
+      do j = 1, NP       
+        mu(:,i) = Config%Charge(ind)*R(:,ind) 
+        ind = ind + 1 
+      end do
+      A =  matmul(matrix_Bt(q(:,i)),matrix_C(q(:,i)))
+      theta(:,i) = matmul(A,mu(:,i))
+    end do
+  end subroutine ComputeTheta
+!---------------------------------------------------------------------------------------------------
+  subroutine ComputeMu
+    integer ::  i
+    real(rb) :: A(3,3)
+    do i = 1, NB
+      A =  matmul(matrix_Bt(q(:,i)),matrix_C(q(:,i)))      
+      mu(:,i) = matmul( transpose(A),theta(:,i) )
+    end do
+  end subroutine ComputeMu
+!---------------------------------------------------------------------------------------------------
+  subroutine rdf_save_to_file(  file, append )
+    character(*),         intent(in)           :: file
+    logical,        intent(in), optional :: append
+    integer, parameter :: out = 65
+    logical :: app
+    app = present(append)
+    if (app) app = append
+    if (app) then
+      open(unit=out,file=file,status="old",position="append")
+    else
+      open(unit=out,file=file,status="replace")
+    end if
+    call rdf_save_to_unit( out )
+    close(out)
+  end subroutine rdf_save_to_file
+!---------------------------------------------------------------------------------------------------
+ subroutine rdf_save_to_unit( unit)
+   integer,        intent(in)    :: unit
+   integer :: i
+   character(3) :: Ci, Cj
+   character(sl) :: title
+   title = "r"
+   do i = 1, npairs
+     write(Ci,'(I3)') itype(i)
+     write(Cj,'(I3)') jtype(i)
+     title = trim(title)//" g("//trim(adjustl(Ci))//","//trim(adjustl(Cj))//")"
+   end do
+   write(unit,'(A)') trim(title)
+     do i = 1, bins 
+       write(unit,*) (i-0.5)*Rc/bins, gr(i,:)/real(counter,rb)
+     end do
+ end subroutine rdf_save_to_unit
+!---------------------------------------------------------------------------------------------------
+  pure function matrix_B( q ) result( B )
+    real(rb), intent(in) :: q(0:3)
+    real(rb)             :: B(4,3)
+    B = reshape( [-q(1),  q(0),  q(3), -q(2),  &
+                  -q(2), -q(3),  q(0),  q(1),  &
+                  -q(3),  q(2), -q(1),  q(0)], [4,3] )
+  end function matrix_B
+!---------------------------------------------------------------------------------------------------
+  pure function matrix_C( q ) result( C )
+    real(rb), intent(in) :: q(0:3)
+    real(rb)             :: C(4,3)
+    C = reshape( [-q(1),  q(0), -q(3),  q(2),  &
+                  -q(2),  q(3),  q(0), -q(1),  &
+                  -q(3), -q(2),  q(1),  q(0)], [4,3] )
+  end function matrix_C
+!---------------------------------------------------------------------------------------------------
+  pure function matrix_Bt( q ) result( Bt )
+    real(rb), intent(in) :: q(0:3)
+    real(rb)             :: Bt(3,4)
+    Bt = reshape( [-q(1), -q(2), -q(3), &
+                    q(0), -q(3),  q(2), &
+                    q(3),  q(0), -q(1), &
+                   -q(2),  q(1),  q(0)  ], [3,4] )
+  end function matrix_Bt
+!---------------------------------------------------------------------------------------------------
+  pure function matrix_Ct( q ) result( Ct )
+    real(rb), intent(in) :: q(0:3)
+    real(rb)             :: Ct(3,4)
+    Ct = reshape( [-q(1), -q(2), -q(3), &
+                    q(0),  q(3), -q(2), &
+                   -q(3),  q(0),  q(1), &
+                    q(2), -q(1),  q(0)  ], [3,4] )
+  end function matrix_Ct
+!===================================================================================================
 end program lj_nvt

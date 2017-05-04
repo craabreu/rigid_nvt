@@ -16,7 +16,7 @@ type tConfig
   real(rb), allocatable :: epsilon(:), sigma(:)
 
   integer  :: natoms
-  integer,  pointer :: Mol(:), Type(:)
+  integer,  pointer :: Mol(:), Type(:), ntype(:) !Added by Ana
   real(rb), pointer :: Charge(:)
 
   real(rb), pointer :: R(:,:), F(:,:), P(:,:)
@@ -53,6 +53,7 @@ contains
     class(tConfig), intent(inout) :: me
     integer,        intent(in)    :: unit
     integer       :: narg, i, k
+    integer       :: t !Added by Ana
     character(sl) :: arg(10)
     real(rb) :: mass
     call next_command( unit, narg, arg )
@@ -101,7 +102,7 @@ contains
       else if ((narg == 1).and.(arg(1) == "Atoms")) then
         associate( N => me % natoms )
           allocate( me%Mol(N), me%Type(N), me%Charge(N) )
-
+          allocate(me%ntype(me%ntypes), source = 0) !Added by Ana
           allocate( me%R(3,N), me%F(3,N), me%P(3,N) )
           me%Rx => me%R(1,:)
           me%Ry => me%R(2,:)
@@ -126,6 +127,8 @@ contains
           me % Px(i) = zero
           me % Py(i) = zero
           me % Pz(i) = zero
+          t = str2int(arg(3)) !Added by Ana
+          me%ntype(t) = me%ntype(t) + 1 !Added by Ana
           if (narg == 10) then
             me % Rx(i) = me % Rx(i) + str2real(arg( 8)) * me % Lx
             me % Ry(i) = me % Ry(i) + str2real(arg( 9)) * me % Ly
