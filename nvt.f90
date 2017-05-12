@@ -169,8 +169,8 @@ do step = NEquil+1, NEquil+NProd
     call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
   end if
-  if (DoMSD == 1 .AND. mod(step,thermo) == 0) call writeln( properties() )
-  if (mod(step,nevery) == 0)  then 
+ if (mod(step,thermo) == 0) call writeln( properties() ) 
+ if (DoMSD == 1 .AND. mod(step,nevery) == 0) then
     call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm) )
     call MSD % sample( Rcm ) 
     if (mod(step,nfreq) == 0) then
