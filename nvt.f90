@@ -20,7 +20,7 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 ! Simulation specifications:
 character(sl) :: Base
 integer       :: i, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode, Nrespa
-real(rb)      :: T, Rc, dt, skin, InRc, ExRc
+real(rb)      :: T, Rc, Rm, dt, skin, InRc, ExRc, alpha
 
 ! System properties:
 integer  :: dof
@@ -83,12 +83,14 @@ do i = 1, Config%ntypes
   if (abs(Config%epsilon(i)) < epsilon(1.0_rb)) then
     model(i) = EmDee_pair_none()
   else
-    model(i) = EmDee_shifted_force( EmDee_pair_lj_cut( Config%epsilon(i)/mvv2e, Config%sigma(i) ) )
+    model(i) = EmDee_pair_lj_smooth( Config%epsilon(i)/mvv2e, Config%sigma(i), Rm, Rc ) 
+!    model(i) = EmDee_shifted_force( EmDee_pair_lj_cut( Config%epsilon(i)/mvv2e, Config%sigma(i) ) )
   end if
   call EmDee_set_pair_model( md, i, i, model(i), kCoul )
 end do
 #ifdef coul
-call EmDee_set_coul_model( md, EmDee_coul_sf() )
+call EmDee_set_coul_model( md, EmDee_coul_smooth(alpha, Rm, Rc) )
+!call EmDee_set_coul_model( md, EmDee_coul_sf() )
 call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
 #endif
 
@@ -111,6 +113,7 @@ do step = 1, NEquil
     case (3); call Kamberaj_Step
     case (4); call Hybrid_Step
     case (5); call New_Hybrid_Step
+    case (6); call Separate_Boost_Step
   end select
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
@@ -164,6 +167,7 @@ do step = NEquil+1, NEquil+NProd
     case (3); call Kamberaj_Step
     case (4); call Hybrid_Step
     case (5); call New_Hybrid_Step
+    case (6); call Separate_Boost_Step
   end select
   if (mod(step,Nconf)==0) then
     call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
@@ -197,7 +201,7 @@ do step = NEquil+1, NEquil+NProd
 
 end do
 call Report
-
+call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
@@ -264,7 +268,7 @@ contains
     read(inp,*); read(inp,*) Base
     read(inp,*); read(inp,*) configFile
     read(inp,*); read(inp,*) T
-    read(inp,*); read(inp,*) Rc
+    read(inp,*); read(inp,*) Rc, Rm, alpha
     read(inp,*); read(inp,*) seed
     read(inp,*); read(inp,*) dt
     read(inp,*); read(inp,*) MDsteps
@@ -327,7 +331,7 @@ contains
     if ((nts < 1).or.(nts > 2)) call error( "wrong translation/rotation thermostat scheme" )
     single = (nts == 1)
     select case (method)
-      case (0,1,4); allocate( nhc_pscaling :: thermostat(nts) )
+      case (0,1,4,6); allocate( nhc_pscaling :: thermostat(nts) )
       case (2,5); allocate( nhc_boosting :: thermostat(nts) )
       case (3); allocate( nhc_kamberaj :: thermostat(nts) )
       case default; call error( "unknown thermostat method" )
@@ -548,6 +552,25 @@ contains
     end if
     call EmDee_boost( md, one, zero, dt_2 )
   end subroutine Kamberaj_Step
+!-----------------------------------------------------------------------------------------------------
+  subroutine Separate_Boost_Step
+    transOnly
+    call EmDee_boost( md, one, zero, dt_4 ) 
+    rotOnly
+    call EmDee_boost( md, one, zero, dt_4 )
+    trans_rot
+    call EmDee_displace( md, one, zero, dt_2 )    
+    rotOnly
+    call EmDee_boost( md, one, zero, dt_2 )
+    transOnly
+    call EmDee_boost( md, one, zero, dt_2 )
+    trans_rot
+    call EmDee_displace( md, one, zero, dt_2 )    
+    rotOnly
+    call EmDee_boost( md, one, zero, dt_4 )
+    transOnly
+    call EmDee_boost( md, one, zero, dt_4 )     
+   end subroutine Separate_Boost_Step
 !-----------------------------------------------------------------------------------------------------
   subroutine ComputeTheta
     integer :: ind, i, j

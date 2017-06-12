@@ -191,9 +191,9 @@ contains
     end do
     write(unit,'(/,"Atoms",/)')
     do i = 1, me % natoms
-      xi = me%Rx(i)
-      yi = me%Ry(i)
-      zi = me%Rz(i)
+      xi = me%R(1,i)
+      yi = me%R(2,i)
+      zi = me%R(3,i)
       write(unit,'(A,X,A)') trim(join(int2str([i,me%Mol(i),me%Type(i)]))),  &
                             trim(join(real2str([me%Charge(i),xi,yi,zi])))
     end do
