@@ -45,13 +45,16 @@ integer :: DoRdf, Gnevery, Rnfreq, bins, npairs, counter
 real(rb), allocatable :: gr(:,:), rdf(:,:)
 integer , allocatable :: itype(:), jtype(:)
 
+! RESPA variables:
+real(rb), pointer :: F_slow(:,:), F_fast(:,:)
+
 ! Other variables:
 integer  :: step
-real(rb) :: dt_2, dt_4, KE_sp, kT
+real(rb) :: dt_2, dt_4, KE_sp, kT, small_dt, small_dt_2
 character(256) :: filename, configFile
 
 integer :: threads
-type(tEmDee) :: md
+type(tEmDee) :: md, fast
 type(c_ptr), allocatable :: model(:)
 type(kiss) :: random
 type(tMSD) :: MSD
@@ -74,31 +77,20 @@ call Read_Specifications( filename )
 call Config % Read( configFile )
 call Setup_Simulation
 
-md = EmDee_system( threads, 1, Rc, skin, Config%natoms, &
-                   c_loc(Config%Type), c_loc(Config%mass), c_loc(Config%Mol) )
-md%Options%rotationMode = rotationMode
-
 allocate( model(Config%ntypes) )
-do i = 1, Config%ntypes
-  if (abs(Config%epsilon(i)) < epsilon(1.0_rb)) then
-    model(i) = EmDee_pair_none()
-  else
-    model(i) = EmDee_pair_lj_smooth( Config%epsilon(i)/mvv2e, Config%sigma(i), Rm, Rc ) 
-!    model(i) = EmDee_shifted_force( EmDee_pair_lj_cut( Config%epsilon(i)/mvv2e, Config%sigma(i) ) )
-  end if
-  call EmDee_set_pair_model( md, i, i, model(i), kCoul )
-end do
-#ifdef coul
-call EmDee_set_coul_model( md, EmDee_coul_smooth(alpha, Rm, Rc) )
-!call EmDee_set_coul_model( md, EmDee_coul_sf() )
-call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
-#endif
+call Configure_System( md, Rm, Rc )
+if (Nrespa > 0) then
+  allocate( F_slow(3,N), F_fast(3,N) )
+  call Configure_System( fast, InRc, ExRc )
+  call EmDee_share_phase_space( md, fast )
 
-if (Nrespa > 0) call EmDee_set_respa( md, InRc, ExRc, Nrespa, 0 )
+  call EmDee_download( md, "forces"//char(0), c_loc(F_slow) )
+  call EmDee_download( fast, "forces"//char(0), c_loc(F_fast) )
+  F_slow = F_slow - F_fast
+  call EmDee_upload( md, "forces"//char(0), c_loc(F_slow) )
 
-call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
-call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
-call EmDee_random_momenta( md, kT, .true._1, seed )
+end if
+
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
 call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_r1 KinEng_r2 KinEng_r3 "// &
@@ -117,7 +109,9 @@ do step = 1, NEquil
   end select
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
-call Report
+call writeln( "Loop time of", real2str(md%Time%Total), "s." )
+call Report( md, "ALL FORCES" )
+if (Nrespa > 0) call Report( fast, "FAST FORCES" )
 
 call writeln( )
 call writeln( "Memory usage" )
@@ -147,7 +141,6 @@ if (DoDipole == 1) then
   open(newunit = out, file = trim(Base)//".dipole", status = "replace")
   close(out)
 end if
-
 
 if (DoRdf == 1) then 
   allocate(gr(bins,npairs), source = 0.0_rb) 
@@ -197,27 +190,57 @@ do step = NEquil+1, NEquil+NProd
       call rdf_save_to_file( trim(Base)//".rdf", append = .true. )
     end if
   end if
-
-
 end do
-call Report
+call writeln( "Loop time of", real2str(md%Time%Total), "s." )
+call Report( md, "ALL FORCES" )
+if (Nrespa > 0) call Report( fast, "FAST FORCES" )
 call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
 contains
   !-------------------------------------------------------------------------------------------------
-  subroutine Report
+  subroutine Configure_System( md, Rm, Rc )
+    type(tEmDee), intent(inout) :: md
+    real(rb),     intent(in)    :: Rm, Rc
+
+    md = EmDee_system( threads, 1, Rc, skin, Config%natoms, &
+                       c_loc(Config%Type), c_loc(Config%mass), c_loc(Config%Mol) )
+    md%Options%rotationMode = rotationMode
+
+    do i = 1, Config%ntypes
+      if (abs(Config%epsilon(i)) < epsilon(1.0_rb)) then
+        model(i) = EmDee_pair_none()
+      else
+        model(i) = EmDee_shifted_smoothed( &
+                     EmDee_pair_lj_cut( Config%epsilon(i)/mvv2e, Config%sigma(i) ), Rc-Rm )
+      end if
+      call EmDee_set_pair_model( md, i, i, model(i), kCoul )
+    end do
+
+#   ifdef coul
+      call EmDee_set_coul_model( md, EmDee_coul_damped_smoothed( alpha, Rc-Rm ) )
+      call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
+#   endif
+
+    call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
+    call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
+    call EmDee_random_momenta( md, kT, .true._1, seed )
+
+  end subroutine Configure_System
+  !-------------------------------------------------------------------------------------------------
+  subroutine Report( md, title )
+    type(tEmDee), intent(in) :: md
+    character(*), intent(in) :: title
     real(rb) :: other
-    call writeln( "Loop time of", real2str(md%Time%Total), "s." )
-    call writeln()
+    call writeln( repeat("-",40) )
+    call writeln( title )
+    call writeln( repeat("-",40) )
     call writeln( "Pair time      =", real2str(md%Time%Pair), "s." )
-    call writeln( "Fast Pair time =", real2str(md%Time%FastPair), "s." )
     call writeln( "Neighbor time  =", real2str(md%Time%Neighbor), "s." )
     other = md%Time%Total - (md%Time%Pair + md%Time%FastPair + md%Time%Neighbor)
-    call writeln( "Other time =", real2str(other), "s." )
-    call writeln()
     call writeln( "Neighbor list builds =", int2str(md%builds) )
+    call writeln( repeat("-",40) )
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
@@ -322,6 +345,8 @@ contains
     if (Rc+skin >= half*min(Lx,Ly,Lz)) call error( "minimum image convention failed!" )
     dt_2 = half*dt
     dt_4 = 0.25_rb*dt
+    small_dt = dt/Nrespa
+    small_dt_2 = dt_2/Nrespa
     NB = maxval(Config%Mol)
     dof = 6*NB - 3
     kT = kB*T
@@ -346,10 +371,23 @@ contains
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
   subroutine Verlet_Step
-!    call EmDee_boost( md, one, zero, dt_2 )
-!    call EmDee_displace( md, one, zero, dt )
-!    call EmDee_boost( md, one, zero, dt_2 )
-    call EmDee_advance( md, zero, zero, dt )
+    integer :: i
+    call EmDee_boost( md, one, zero, dt_2 )
+    if (Nrespa > 0) then
+      do i = 1, Nrespa
+        call EmDee_boost( fast, one, zero, small_dt_2 )
+        call EmDee_displace( fast, one, zero, small_dt )
+        call EmDee_boost( fast, one, zero, small_dt_2 )
+      end do
+      call EmDee_compute_forces( md )
+      call EmDee_download( md, "forces"//char(0), c_loc(F_slow) )
+      call EmDee_download( fast, "forces"//char(0), c_loc(F_fast) )
+      F_slow = F_slow - F_fast
+      call EmDee_upload( md, "forces"//char(0), c_loc(F_slow) )
+    else
+      call EmDee_displace( md, one, zero, dt )
+    end if
+    call EmDee_boost( md, one, zero, dt_2 )
   end subroutine Verlet_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
