@@ -19,8 +19,8 @@ real(rb), parameter :: kCoul = 0.13893545755135628_rb ! Coulomb constant in Da*A
 
 ! Simulation specifications:
 character(sl) :: Base
-integer       :: i, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode, Nrespa
-real(rb)      :: T, Rc, Rm, dt, skin, InRc, ExRc, alpha
+integer       :: i, N, NB, seed, MDsteps, Nconf, thermo, Nequil, Nprod, rotationMode
+real(rb)      :: T, Rc, Rm, dt, skin, alpha
 
 ! System properties:
 integer  :: dof
@@ -45,16 +45,13 @@ integer :: DoRdf, Gnevery, Rnfreq, bins, npairs, counter
 real(rb), allocatable :: gr(:,:), rdf(:,:)
 integer , allocatable :: itype(:), jtype(:)
 
-! RESPA variables:
-real(rb), pointer :: F_slow(:,:), F_fast(:,:)
-
 ! Other variables:
 integer  :: step
-real(rb) :: dt_2, dt_4, KE_sp, kT, small_dt, small_dt_2
+real(rb) :: dt_2, dt_4, KE_sp, kT
 character(256) :: filename, configFile
 
 integer :: threads
-type(tEmDee) :: md, fast
+type(tEmDee) :: md
 type(c_ptr), allocatable :: model(:)
 type(kiss) :: random
 type(tMSD) :: MSD
@@ -63,6 +60,10 @@ integer :: out
 #define trans_rot md%Options%translate = .true.;  md%Options%rotate = .true.
 #define transOnly md%Options%translate = .true.;  md%Options%rotate = .false.
 #define rotOnly   md%Options%translate = .false.; md%Options%rotate = .true.
+
+character(*), parameter :: titles = "Step Temp Ts Press Ps KinEng KinEng_t KinEng_r "// &
+                                    "KinEng_r1 KinEng_r2 KinEng_r3 DispEng CoulEng PotEng "// &
+                                    "TotEng H_nhc Virial BodyVirial Ks Ks_t Ks_r Us Hs Hs_nhc"
 
 ! Executable code:
 #ifdef coul
@@ -78,45 +79,22 @@ call Config % Read( configFile )
 call Setup_Simulation
 
 allocate( model(Config%ntypes) )
-call Configure_System( md, Rm, Rc )
-if (Nrespa > 0) then
-  allocate( F_slow(3,N), F_fast(3,N) )
-  call Configure_System( fast, InRc, ExRc )
-  call EmDee_share_phase_space( md, fast )
-
-  call EmDee_download( md, "forces"//char(0), c_loc(F_slow) )
-  call EmDee_download( fast, "forces"//char(0), c_loc(F_fast) )
-  F_slow = F_slow - F_fast
-  call EmDee_upload( md, "forces"//char(0), c_loc(F_slow) )
-
-end if
-
+call Configure_System( md, Rm, Rc, alpha )
 call Config % Save_XYZ( trim(Base)//".xyz" )
 
-call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_r1 KinEng_r2 KinEng_r3 "// &
-              "PotEng DispEng CoulEng TotEng Virial BodyVirial Press H_nhc" )
+call writeln( titles )
 step = 0
 call writeln( properties() )
 do step = 1, NEquil
-  select case (method)
-    case (0); call Verlet_Step
-    case (1); call Pscaling_Step
-    case (2); call Boosting_Step
-    case (3); call Kamberaj_Step
-    case (4); call Hybrid_Step
-    case (5); call New_Hybrid_Step
-    case (6); call Separate_Boost_Step
-  end select
+  call execute_step
   if (mod(step,thermo) == 0) call writeln( properties() )
 end do
 call writeln( "Loop time of", real2str(md%Time%Total), "s." )
-call Report( md, "ALL FORCES" )
-if (Nrespa > 0) call Report( fast, "FAST FORCES" )
+call Report( md )
 
 call writeln( )
 call writeln( "Memory usage" )
-call writeln( "Step Temp KinEng KinEng_t KinEng_r KinEng_r1 KinEng_r2 KinEng_r3 "// &
-              "PotEng DispEng CoulEng TotEng Virial BodyVirial Press H_nhc" )
+call writeln( titles )
 step = NEquil
 call writeln( properties() )
 
@@ -153,15 +131,7 @@ if (DoRdf == 1) then
 end if
 
 do step = NEquil+1, NEquil+NProd
-  select case (method)
-    case (0); call Verlet_Step
-    case (1); call Pscaling_Step
-    case (2); call Boosting_Step
-    case (3); call Kamberaj_Step
-    case (4); call Hybrid_Step
-    case (5); call New_Hybrid_Step
-    case (6); call Separate_Boost_Step
-  end select
+  call execute_step
   if (mod(step,Nconf)==0) then
     call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
@@ -192,17 +162,28 @@ do step = NEquil+1, NEquil+NProd
   end if
 end do
 call writeln( "Loop time of", real2str(md%Time%Total), "s." )
-call Report( md, "ALL FORCES" )
-if (Nrespa > 0) call Report( fast, "FAST FORCES" )
+call Report( md )
 call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
 contains
   !-------------------------------------------------------------------------------------------------
-  subroutine Configure_System( md, Rm, Rc )
+  subroutine execute_step
+    select case (method)
+      case (0); call EmDee_verlet_step( md, dt )
+      case (1); call Pscaling_Step
+      case (2); call Boosting_Step
+      case (3); call Kamberaj_Step
+      case (4); call Hybrid_Step
+      case (5); call New_Hybrid_Step
+      case (6); call Pscaling_Shadow_Step
+    end select
+  end subroutine execute_step
+  !-------------------------------------------------------------------------------------------------
+  subroutine Configure_System( md, Rm, Rc, alpha )
     type(tEmDee), intent(inout) :: md
-    real(rb),     intent(in)    :: Rm, Rc
+    real(rb),     intent(in)    :: Rm, Rc, alpha
 
     md = EmDee_system( threads, 1, Rc, skin, Config%natoms, &
                        c_loc(Config%Type), c_loc(Config%mass), c_loc(Config%Mol) )
@@ -229,39 +210,46 @@ contains
 
   end subroutine Configure_System
   !-------------------------------------------------------------------------------------------------
-  subroutine Report( md, title )
+  subroutine Report( md )
     type(tEmDee), intent(in) :: md
-    character(*), intent(in) :: title
     real(rb) :: other
-    call writeln( repeat("-",40) )
-    call writeln( title )
     call writeln( repeat("-",40) )
     call writeln( "Pair time      =", real2str(md%Time%Pair), "s." )
     call writeln( "Neighbor time  =", real2str(md%Time%Neighbor), "s." )
-    other = md%Time%Total - (md%Time%Pair + md%Time%FastPair + md%Time%Neighbor)
+    other = md%Time%Total - (md%Time%Pair + md%Time%Neighbor)
     call writeln( "Neighbor list builds =", int2str(md%builds) )
     call writeln( repeat("-",40) )
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
-    real(rb) :: Temp
-    real(rb) :: Etotal
+    real(rb) :: Temp, Ts, H, Hs, Hthermo
     Temp = (md%Energy%Kinetic/KE_sp)*T
-    Etotal = md%Energy%Potential + md%Energy%Kinetic
+    Ts = (md%Energy%ShadowKinetic/KE_sp)*T
+    H = md%Energy%Potential + md%Energy%Kinetic
+    Hs = md%Energy%ShadowPotential + md%Energy%ShadowKinetic
+    Hthermo = sum(thermostat%energy())
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
-                                 mvv2e*md%Energy%Kinetic, &
-                                 mvv2e*(md%Energy%Kinetic - md%Energy%Rotational), &
-                                 mvv2e*md%Energy%Rotational, &
-                                 mvv2e*md%Energy%RotPart, &
-                                 mvv2e*md%Energy%Potential, &
-                                 mvv2e*md%Energy%Dispersion, &
-                                 mvv2e*md%Energy%Coulomb, &
-                                 mvv2e*Etotal, &
-                                 mvv2e*md%Virial, &
-                                 mvv2e*md%BodyVirial, &
-                                 Pconv*((NB-1)*kB*Temp + (1.0_rb/3.0_rb)*md%Virial)/Volume, &
-                                 mvv2e*(Etotal + sum(thermostat%energy())) ]))
+                                 Ts, &
+                                 Pconv*((NB-1)*kB*Temp + md%Virial/3.0_rb)/Volume, &
+                                 Pconv*((NB-1)*kB*Ts + md%Virial/3.0_rb)/Volume, &
+                                 mvv2e*[md%Energy%Kinetic, &
+                                        md%Energy%Kinetic - md%Energy%Rotational, &
+                                        md%Energy%Rotational, &
+                                        md%Energy%RotPart, &
+                                        md%Energy%Dispersion, &
+                                        md%Energy%Coulomb, &
+                                        md%Energy%Potential, &
+                                        H, &
+                                        H + Hthermo, &
+                                        md%Virial, &
+                                        md%BodyVirial, &
+                                        md%Energy%ShadowKinetic, &
+                                        md%Energy%ShadowKinetic - md%Energy%ShadowRotational, &
+                                        md%Energy%ShadowRotational, &
+                                        md%Energy%ShadowPotential, &
+                                        Hs, &
+                                        Hs + Hthermo]]))
   end function properties
   !-------------------------------------------------------------------------------------------------
   subroutine Get_Command_Line_Args( threads, filename )
@@ -303,8 +291,6 @@ contains
     read(inp,*); read(inp,*) ndamp, M, nloops
     read(inp,*); read(inp,*) nts
     read(inp,*); read(inp,*) rotationMode
-    read(inp,*); read(inp,*) Nrespa
-    read(inp,*); read(inp,*) InRc, ExRc
     read(inp,*); read(inp,*) DoMSD, nevery, blocksize, nfreq
     read(inp,*); read(inp,*) DoDipole, Dnevery, Dblocksize, Dnfreq
     read(inp,*); read(inp,*) npairs
@@ -332,7 +318,7 @@ contains
       call writeln( "Rotation mode: exact solution" )
     else
       call writeln( "Rotation mode: Miller with", int2str(rotationMode), "respa steps" )
-    end if   
+    end if
     call writeln()
   end subroutine Read_Specifications
   !-------------------------------------------------------------------------------------------------
@@ -345,8 +331,6 @@ contains
     if (Rc+skin >= half*min(Lx,Ly,Lz)) call error( "minimum image convention failed!" )
     dt_2 = half*dt
     dt_4 = 0.25_rb*dt
-    small_dt = dt/Nrespa
-    small_dt_2 = dt_2/Nrespa
     NB = maxval(Config%Mol)
     dof = 6*NB - 3
     kT = kB*T
@@ -370,33 +354,11 @@ contains
     end if
   end subroutine Setup_Simulation
   !-------------------------------------------------------------------------------------------------
-  subroutine Verlet_Step
-    integer :: i
-    call EmDee_boost( md, one, zero, dt_2 )
-    if (Nrespa > 0) then
-      do i = 1, Nrespa
-        call EmDee_boost( fast, one, zero, small_dt_2 )
-        call EmDee_displace( fast, one, zero, small_dt )
-        call EmDee_boost( fast, one, zero, small_dt_2 )
-      end do
-      call EmDee_compute_forces( md )
-      call EmDee_download( md, "forces"//char(0), c_loc(F_slow) )
-      call EmDee_download( fast, "forces"//char(0), c_loc(F_fast) )
-      F_slow = F_slow - F_fast
-      call EmDee_upload( md, "forces"//char(0), c_loc(F_slow) )
-    else
-      call EmDee_displace( md, one, zero, dt )
-    end if
-    call EmDee_boost( md, one, zero, dt_2 )
-  end subroutine Verlet_Step
-  !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
     if (single) then
       call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
-      call EmDee_boost( md, one, zero, dt_2 )
-      call EmDee_displace( md, one, zero, dt )
-      call EmDee_boost( md, one, zero, dt_2 )
+      call EmDee_verlet_step( md, dt )
       call thermostat(1) % integrate( dt_2, two*md%Energy%Kinetic )
       call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
     else
@@ -419,6 +381,23 @@ contains
       trans_rot
     end if
   end subroutine Pscaling_Step
+  !-------------------------------------------------------------------------------------------------
+  subroutine Pscaling_Shadow_Step
+    real(rb) :: alpha, factor
+    if (single) then
+      call thermostat(1) % integrate( dt_2, two*md%Energy%ShadowKinetic )
+      call EmDee_boost( md, zero, thermostat(1)%damping, dt_2 )
+      call EmDee_verlet_step( md, dt )
+      call thermostat(1) % integrate( dt_2, two*md%Energy%ShadowKinetic )
+      alpha = thermostat(1)%damping
+      call EmDee_boost( md, zero, alpha, dt_2 )
+      factor = exp(-2*alpha*dt)
+      md%Energy%ShadowKinetic = factor*md%Energy%ShadowKinetic
+      md%Energy%ShadowRotational = factor*md%Energy%ShadowRotational
+    else
+      stop "P-scaling shadow only admits single thermostat"
+    end if
+  end subroutine Pscaling_Shadow_Step
   !-------------------------------------------------------------------------------------------------
   subroutine New_Hybrid_Step
     integer :: i

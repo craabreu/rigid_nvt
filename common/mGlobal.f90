@@ -1,8 +1,8 @@
 module mGlobal
 
 integer,      parameter :: rb = 8      !< Default number of bytes for real numbers
-integer,      parameter :: sl = 256    !< Default character string length
-character(3), parameter :: csl = "256" !< String with default character string length
+integer,      parameter :: sl = 512    !< Default character string length
+character(3), parameter :: csl = "512" !< String with default character string length
 
 real(rb), parameter :: zero  = 0.0_rb, &
                        one   = 1.0_rb, &
