@@ -193,7 +193,7 @@ contains
       if (abs(Config%epsilon(i)) < epsilon(1.0_rb)) then
         model(i) = EmDee_pair_none()
       else
-        model(i) = EmDee_shifted_smoothed( &
+        model(i) = EmDee_smoothed( &
                      EmDee_pair_lj_cut( Config%epsilon(i)/mvv2e, Config%sigma(i) ), Rc-Rm )
       end if
       call EmDee_set_pair_model( md, i, i, model(i), kCoul )
