@@ -100,7 +100,7 @@ call writeln( properties() )
 
 if (DoMsd == 1) then
   allocate(Rcm(3,NB)) 
-  call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm) )  
+  call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm(1,1)) )  
   call MSD % setup( nevery, blocksize, Nprod, Rcm )
   open(newunit = out, file = trim(Base)//".msd", status = "replace")
   close(out)
@@ -112,8 +112,8 @@ if (DoDipole == 1) then
   allocate(mu(3,NB)) 
   allocate(theta(3,NB)) 
   NP = N/NB  
-  call EmDee_download( md, "coordinates"//c_null_char, c_loc(R) )
-  call EmDee_download(md, "quaternions"//c_null_char, c_loc(q))
+  call EmDee_download( md, "coordinates"//c_null_char, c_loc(R(1,1)) )
+  call EmDee_download(md, "quaternions"//c_null_char, c_loc(q(1,1)))
   call ComputeTheta
   call ACF % setup( Dnevery, Dblocksize, Nprod, mu )
   open(newunit = out, file = trim(Base)//".dipole", status = "replace")
@@ -133,19 +133,19 @@ end if
 do step = NEquil+1, NEquil+NProd
   call execute_step
   if (mod(step,Nconf)==0) then
-    call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
+    call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R(1,1)) )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
   end if
  if (mod(step,thermo) == 0) call writeln( properties() ) 
  if (DoMSD == 1 .AND. mod(step,nevery) == 0) then
-    call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm) )
+    call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm(1,1)) )
     call MSD % sample( Rcm ) 
     if (mod(step,nfreq) == 0) then
       call MSD % save( trim(Base)//".msd", append = .true. )
     end if
   end if
   if (DoDipole == 1 .AND. mod(step,Dnevery) == 0)  then 
-    call EmDee_download(md, "quaternions"//c_null_char, c_loc(q))
+    call EmDee_download(md, "quaternions"//c_null_char, c_loc(q(1,1)))
     call ComputeMu
     call ACF % sample( mu ) 
     if (mod(step,Dnfreq) == 0) then
@@ -163,7 +163,7 @@ do step = NEquil+1, NEquil+NProd
 end do
 call writeln( "Loop time of", real2str(md%Time%Total), "s." )
 call Report( md )
-call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R) )
+call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R(1,1)) )
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
 
@@ -186,7 +186,7 @@ contains
     real(rb),     intent(in)    :: Rm, Rc, alpha
 
     md = EmDee_system( threads, 1, Rc, skin, Config%natoms, &
-                       c_loc(Config%Type), c_loc(Config%mass), c_loc(Config%Mol) )
+                       c_loc(Config%Type(1)), c_loc(Config%mass(1)), c_loc(Config%Mol(1)) )
     md%Options%rotationMode = rotationMode
 
     do i = 1, Config%ntypes
@@ -201,11 +201,11 @@ contains
 
 #   ifdef coul
       call EmDee_set_coul_model( md, EmDee_coul_damped_smoothed( alpha, Rc-Rm ) )
-      call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge) )
+      call EmDee_upload( md, "charges"//c_null_char, c_loc(Config%Charge(1)) )
 #   endif
 
     call EmDee_upload( md, "box"//c_null_char, c_loc(Config%Lx) )
-    call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R) )
+    call EmDee_upload( md, "coordinates"//c_null_char, c_loc(Config%R(1,1)) )
     call EmDee_random_momenta( md, kT, .true._1, seed )
 
   end subroutine Configure_System
