@@ -1,5 +1,5 @@
 # Compilers and their basic options:
-FORT ?= gfortran
+FORT ?= mpif90
 EXECUTABLE ?= nvt
 
 BASIC_OPTS = -march=native -m64 -fopenmp -cpp -fmax-errors=1

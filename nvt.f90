@@ -61,9 +61,13 @@ integer :: out
 #define transOnly md%Options%translate = .true.;  md%Options%rotate = .false.
 #define rotOnly   md%Options%translate = .false.; md%Options%rotate = .true.
 
-character(*), parameter :: titles = "Step Temp Ts Press Ps KinEng KinEng_t KinEng_r "// &
+character(*), parameter :: titles = "Step rank Temp Ts Press Ps KinEng KinEng_t KinEng_r "// &
                                     "KinEng_r1 KinEng_r2 KinEng_r3 DispEng CoulEng PotEng "// &
                                     "TotEng H_nhc Virial BodyVirial Ks Ks_t Ks_r Us Hs Hs_nhc"
+! MPI variables:
+include 'mpif.h'
+integer :: ierr, nprocs, my_rank
+character(sl) :: rank
 
 ! Executable code:
 #ifdef coul
@@ -73,6 +77,13 @@ character(*), parameter :: titles = "Step Temp Ts Press Ps KinEng KinEng_t KinEn
 #endif
 
 call Get_Command_Line_Args( threads, filename )
+
+call MPI_Init( ierr )
+call MPI_Comm_Size( MPI_COMM_WORLD, nprocs, ierr )
+call MPI_Comm_Rank( MPI_COMM_WORLD, my_rank, ierr )
+rank = adjustl(int2str(my_rank + 1))
+filename = trim(filename)//"_"//trim(rank)//".inp"
+
 call Read_Specifications( filename )
 
 call Config % Read( configFile )
@@ -92,7 +103,7 @@ end do
 call writeln( "Loop time of", real2str(md%Time%Total), "s." )
 call Report( md )
 
-call writeln( )
+if (my_rank == 0) call writeln( )
 call writeln( "Memory usage" )
 call writeln( titles )
 step = NEquil
@@ -166,6 +177,7 @@ call Report( md )
 call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R(1,1)) )
 call Config % Write( trim(Base)//"_out.lmp", velocities = .true. )
 call stop_log
+call MPI_Finalize( ierr )
 
 contains
   !-------------------------------------------------------------------------------------------------
@@ -228,7 +240,7 @@ contains
     H = md%Energy%Potential + md%Energy%Kinetic
     Hs = md%Energy%ShadowPotential + md%Energy%ShadowKinetic
     Hthermo = sum(thermostat%energy())
-    properties = trim(adjustl(int2str(step))) // " " // &
+    properties = trim(adjustl(int2str(step))) // " " // trim(rank) // " " // &
                  join(real2str([ Temp, &
                                  Ts, &
                                  Pconv*((NB-1)*kB*Temp + md%Virial/3.0_rb)/Volume, &
