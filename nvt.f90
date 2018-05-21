@@ -391,7 +391,7 @@ contains
       call thermostat(1) % integrate( dt_2, two*md%Energy%ShadowKinetic )
       alpha = thermostat(1)%damping
       call EmDee_boost( md, zero, alpha, dt_2 )
-      factor = exp(-2*alpha*dt)
+      factor = exp(-alpha*dt)
       md%Energy%ShadowKinetic = factor*md%Energy%ShadowKinetic
       md%Energy%ShadowRotational = factor*md%Energy%ShadowRotational
     else
