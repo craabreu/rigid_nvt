@@ -29,6 +29,7 @@ real(rb) :: Volume
 ! Thermostat variables:
 integer :: method, M, ndamp, nloops, nts
 logical :: single
+real(rb) :: tdamp, Hthermo
 class(nhc), pointer :: thermostat(:)
 
 ! Mean Square Displacement variables: 
@@ -53,7 +54,7 @@ character(256) :: filename, configFile
 integer :: threads
 type(tEmDee) :: md
 type(c_ptr), allocatable :: model(:)
-type(kiss) :: random
+type(mt19937) :: random
 type(tMSD) :: MSD
 type(tACF) :: ACF
 integer :: out
@@ -178,6 +179,8 @@ contains
       case (4); call Hybrid_Step
       case (5); call New_Hybrid_Step
       case (6); call Pscaling_Shadow_Step
+      case (7); call Bussi_Step
+      case (8); call Bussi_Shadow_Step
     end select
   end subroutine execute_step
   !-------------------------------------------------------------------------------------------------
@@ -222,12 +225,12 @@ contains
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
-    real(rb) :: Temp, Ts, H, Hs, Hthermo
+    real(rb) :: Temp, Ts, H, Hs
     Temp = (md%Energy%Kinetic/KE_sp)*T
     Ts = (md%Energy%ShadowKinetic/KE_sp)*T
     H = md%Energy%Potential + md%Energy%Kinetic
     Hs = md%Energy%ShadowPotential + md%Energy%ShadowKinetic
-    Hthermo = sum(thermostat%energy())
+    if ((method > 0).and.(method < 7)) Hthermo = sum(thermostat%energy())
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
                                  Ts, &
@@ -340,19 +343,64 @@ contains
     if ((nts < 1).or.(nts > 2)) call error( "wrong translation/rotation thermostat scheme" )
     single = (nts == 1)
     select case (method)
-      case (0,1,4,6); allocate( nhc_pscaling :: thermostat(nts) )
+      case (0,1,4,6,7,8); allocate( nhc_pscaling :: thermostat(nts) )
       case (2,5); allocate( nhc_boosting :: thermostat(nts) )
       case (3); allocate( nhc_kamberaj :: thermostat(nts) )
       case default; call error( "unknown thermostat method" )
     end select
+    tdamp = ndamp*dt
+    Hthermo = 0.0_rb
     if (method == 5) then
       call thermostat(1) % setup( M, kT, ndamp*dt, (6/nts)*NB-3, 1 )
-      if (nts == 2) call thermostat(2) % setup( M, kT, ndamp*dt, 3*NB, 1 )
+      if (nts == 2) call thermostat(2) % setup( M, kT, tdamp, 3*NB, 1 )
     else
       call thermostat(1) % setup( M, kT, ndamp*dt, (6/nts)*NB-3, nloops )
-      if (nts == 2) call thermostat(2) % setup( M, kT, ndamp*dt, 3*NB, nloops )
+      if (nts == 2) call thermostat(2) % setup( M, kT, tdamp, 3*NB, nloops )
     end if
   end subroutine Setup_Simulation
+  !-------------------------------------------------------------------------------------------------
+  function BussiScale(KE, KE_sp, dof, tau, dt) result( alphaSq )
+    real(rb), intent(in) :: KE, KE_sp, tau, dt
+    integer,  intent(in) :: dof
+    real(rb)             :: alphaSq
+    real(rb) :: R1, x, sumRs, A, B, C
+    R1 = random%normal()
+    if (mod(dof, 2) == 1) then
+      x = (dof - 1)/2
+      sumRs = 2.0*random%gamma(x)
+    else
+      x = (dof - 2)/2
+      sumRs = 2.0*random%gamma(x) + random%normal()**2
+    end if
+    A = exp(-dt/tau)
+    B = 1.0 - A
+    C = KE_sp/(dof*KE)
+    alphaSq = A + C*B*(R1**2 + sumRs) + 2.0*sqrt(C*B*A)*R1
+  end function BussiScale
+  !-------------------------------------------------------------------------------------------------
+  subroutine Bussi_Step
+    real(rb) :: factor
+    factor = BussiScale( md%Energy%Kinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%Kinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+    call EmDee_verlet_step( md, dt )
+    factor = BussiScale( md%Energy%Kinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%Kinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+  end subroutine Bussi_Step
+  !-------------------------------------------------------------------------------------------------
+  subroutine Bussi_Shadow_Step
+    real(rb) :: factor
+    factor = BussiScale( md%Energy%ShadowKinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%ShadowKinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+    call EmDee_verlet_step( md, dt )
+    factor = BussiScale( md%Energy%ShadowKinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%ShadowKinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+    md%Energy%ShadowKinetic = factor*md%Energy%ShadowKinetic
+    md%Energy%ShadowRotational = factor*md%Energy%ShadowRotational
+  end subroutine Bussi_Shadow_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
     if (single) then

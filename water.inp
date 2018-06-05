@@ -19,9 +19,9 @@ water.lmp
 [Intervalo para gravação de propriedades]
 10
 [Passos de equilibração e de produção]
-10000 20000
-[Método de termostato: 0) NVE; 1) P-scaling; 2) Boosting; 3) Kamberaj; 4) Hybrid; 5) New_Hybrid; 6) P-scaling-Shadow]
-6
+10000 10000
+[Método de termostato: 0) NVE; 1) P-scaling; 2) Boosting; 3) Kamberaj; 4) Hybrid; 5) New_Hybrid; 6) P-scaling-Shadow; 7) Bussi; 8) Bussi-Shadow]
+8
 [Parâmetros do termostato: ndamp, nchain, nloops]
 100 6 10
 [Termostatização de translação e rotação: 1) junto; 2) separado]
