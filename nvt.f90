@@ -63,7 +63,7 @@ integer :: out
 
 character(*), parameter :: titles = "Step rank Temp Ts Press Ps KinEng KinEng_t KinEng_r "// &
                                     "KinEng_r1 KinEng_r2 KinEng_r3 DispEng CoulEng PotEng "// &
-                                    "TotEng H_nhc Virial BodyVirial Ks Ks_t Ks_r Us Hs Hs_nhc"
+                                    "TotEng H_nhc Virial BodyVirial Ks Ks_t Ks_r Us Hs Hs_nhc H_nhc1 H_nhc2"
 ! MPI variables:
 include 'mpif.h'
 integer :: ierr, nprocs, my_rank
@@ -261,7 +261,7 @@ contains
                                         md%Energy%ShadowRotational, &
                                         md%Energy%ShadowPotential, &
                                         Hs, &
-                                        Hs + Hthermo]]))
+                                        Hs + Hthermo, thermostat%energy()]]))
   end function properties
   !-------------------------------------------------------------------------------------------------
   subroutine Get_Command_Line_Args( threads, filename )
