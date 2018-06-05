@@ -44,6 +44,10 @@ type, abstract :: i32rng
     !! mean 0 and standard deviation 1.
     procedure :: normal => i32rng_normal
 
+    !> Generates a random 64-bit real number distributed according to the
+    !! standard gamma distribution with integer order
+    procedure :: gamma => i32rng_gamma
+
     !> Generates a random 32-bit integer number geometrically distributed with
     !! mean n.
     !! @param[in] n (integer) the mean of the geometric distribution used to
@@ -149,7 +153,7 @@ contains
     tn = 3.442619855899_8
     vn = 0.00991256303526217_8
     q = vn*exp(0.5_8*dn*dn)
-    a%kn(0) = (dn/q)*m1
+    a%kn(0) = int((dn/q)*m1)
     a%kn(1) = 0
     a%wn(0) = q/m1
     a%wn(127) = dn/m1
@@ -157,7 +161,7 @@ contains
     a%fn(127) = exp( -0.5_8*dn*dn )
     do i = 126, 1, -1
       dn = sqrt( -2.0_8 * log( vn/dn + exp( -0.5_8*dn*dn ) ) )
-      a%kn(i+1) = (dn/tn)*m1
+      a%kn(i+1) = int((dn/tn)*m1)
       tn = dn
       a%fn(i) = exp(-0.5_8*dn*dn)
       a%wn(i) = dn/m1
@@ -207,6 +211,32 @@ contains
    end if
   end function i32rng_normal
   !-----------------------------------------------------------------------------
+  function i32rng_gamma( a, alpha ) result( ans )
+    class(i32rng), intent(inout) :: a
+    real(8),       intent(in)    :: alpha
+    real(8)                      :: ans
+    ! Marsaglia and Tsang, "A Simple Method for Generating Gamma Variables"
+    ! ACM Transactions on Mathematical Software, Vol 26, No 3, 2000, pp. 363-372.
+    real(8) :: u, d, c, x, xx, v
+    if (alpha >= 1.0_8) then
+      d = alpha - 1.0_8/3.0_8
+      c = 1.0_8/sqrt(9.0_8*d)
+      do
+        x = a%normal()
+        v = 1.0_8 + c*x
+        if (v <= 0.0_8) cycle
+        v = v*v*v
+        ans = d*v
+        u = a%uniform()
+        xx = x*x
+        if (u < 1.0_8 - 0.0331_8*xx*xx) return
+        if (log(u) < 0.5_8*xx + d - ans + d*log(v)) return
+      end do
+    else
+      ans = a%gamma(alpha + 1.0_8)*a%uniform()**(1.0_8/alpha)
+    end if
+  end function i32rng_gamma
+  !-----------------------------------------------------------------------------
   function i32rng_geometric( a, n ) result( igeo )
     class(i32rng), intent(inout) :: a
     integer,       intent(in)    :: n
@@ -218,8 +248,8 @@ contains
     class(i32rng), intent(inout) :: a
     integer,       intent(in)    :: n
     real(8)                      :: time
-    integer :: i, i32
-    real(8) :: start
+    integer :: i
+    real(8) :: start, i32
     call cpu_time( start )
     do i = 1, n
       i32 = a%uniform()

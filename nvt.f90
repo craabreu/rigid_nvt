@@ -29,16 +29,17 @@ real(rb) :: Volume
 ! Thermostat variables:
 integer :: method, M, ndamp, nloops, nts
 logical :: single
+real(rb) :: tdamp, Hthermo
 class(nhc), pointer :: thermostat(:)
 
-! Mean Square Displacement variables: 
+! Mean Square Displacement variables:
 real(rb), pointer :: Rcm(:,:)
 integer :: DoMsd, nevery, blocksize, nfreq
 
 !Dipole moment variables:
 integer :: DoDipole, Dnevery, Dblocksize, Dnfreq, NP
 real(rb), pointer :: q(:,:), R(:,:)
-real(rb), allocatable :: mu(:,:), theta(:,:) 
+real(rb), allocatable :: mu(:,:), theta(:,:)
 
 !Radial distribution function variables:
 integer :: DoRdf, Gnevery, Rnfreq, bins, npairs, counter
@@ -53,7 +54,7 @@ character(256) :: filename, configFile
 integer :: threads
 type(tEmDee) :: md
 type(c_ptr), allocatable :: model(:)
-type(kiss) :: random
+type(mt19937) :: random
 type(tMSD) :: MSD
 type(tACF) :: ACF
 integer :: out
@@ -110,19 +111,19 @@ step = NEquil
 call writeln( properties() )
 
 if (DoMsd == 1) then
-  allocate(Rcm(3,NB)) 
-  call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm(1,1)) )  
+  allocate(Rcm(3,NB))
+  call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm(1,1)) )
   call MSD % setup( nevery, blocksize, Nprod, Rcm )
   open(newunit = out, file = trim(Base)//".msd", status = "replace")
   close(out)
 end if
 
 if (DoDipole == 1) then
-  allocate(q(4,NB)) 
-  allocate(R(3,N)) 
-  allocate(mu(3,NB)) 
-  allocate(theta(3,NB)) 
-  NP = N/NB  
+  allocate(q(4,NB))
+  allocate(R(3,N))
+  allocate(mu(3,NB))
+  allocate(theta(3,NB))
+  NP = N/NB
   call EmDee_download( md, "coordinates"//c_null_char, c_loc(R(1,1)) )
   call EmDee_download(md, "quaternions"//c_null_char, c_loc(q(1,1)))
   call ComputeTheta
@@ -131,11 +132,11 @@ if (DoDipole == 1) then
   close(out)
 end if
 
-if (DoRdf == 1) then 
-  allocate(gr(bins,npairs), source = 0.0_rb) 
+if (DoRdf == 1) then
+  allocate(gr(bins,npairs), source = 0.0_rb)
   allocate(rdf(bins,npairs), source = 0.0_rb)
   open(newunit = out, file = trim(Base)//".rdf", status = "replace")
-  counter = 1   
+  counter = 1
   call EmDee_rdf(md, bins, npairs, itype, jtype, rdf)
   gr = rdf
   close(out)
@@ -147,26 +148,26 @@ do step = NEquil+1, NEquil+NProd
     call EmDee_download( md, "coordinates"//c_null_char, c_loc(Config%R(1,1)) )
     call Config % Save_XYZ( trim(Base)//".xyz", append = .true. )
   end if
- if (mod(step,thermo) == 0) call writeln( properties() ) 
+ if (mod(step,thermo) == 0) call writeln( properties() )
  if (DoMSD == 1 .AND. mod(step,nevery) == 0) then
     call EmDee_download( md, "centersOfMass"//c_null_char, c_loc(Rcm(1,1)) )
-    call MSD % sample( Rcm ) 
+    call MSD % sample( Rcm )
     if (mod(step,nfreq) == 0) then
       call MSD % save( trim(Base)//".msd", append = .true. )
     end if
   end if
-  if (DoDipole == 1 .AND. mod(step,Dnevery) == 0)  then 
+  if (DoDipole == 1 .AND. mod(step,Dnevery) == 0)  then
     call EmDee_download(md, "quaternions"//c_null_char, c_loc(q(1,1)))
     call ComputeMu
-    call ACF % sample( mu ) 
+    call ACF % sample( mu )
     if (mod(step,Dnfreq) == 0) then
       call ACF % save( trim(Base)//".dipole", append = .true. )
     end if
   end if
-  if (DoRdf == 1 .AND. mod(step,Gnevery) == 0)  then 
+  if (DoRdf == 1 .AND. mod(step,Gnevery) == 0)  then
     call EmDee_rdf(md, bins, npairs, itype, jtype, rdf)
     gr = gr + rdf
-    counter = counter + 1   
+    counter = counter + 1
     if (mod(step,Rnfreq) == 0) then
       call rdf_save_to_file( trim(Base)//".rdf", append = .true. )
     end if
@@ -190,6 +191,8 @@ contains
       case (4); call Hybrid_Step
       case (5); call New_Hybrid_Step
       case (6); call Pscaling_Shadow_Step
+      case (7); call Bussi_Step
+      case (8); call Bussi_Shadow_Step
     end select
   end subroutine execute_step
   !-------------------------------------------------------------------------------------------------
@@ -234,12 +237,12 @@ contains
   end subroutine Report
   !-------------------------------------------------------------------------------------------------
   character(sl) function properties()
-    real(rb) :: Temp, Ts, H, Hs, Hthermo
+    real(rb) :: Temp, Ts, H, Hs
     Temp = (md%Energy%Kinetic/KE_sp)*T
     Ts = (md%Energy%ShadowKinetic/KE_sp)*T
     H = md%Energy%Potential + md%Energy%Kinetic
     Hs = md%Energy%ShadowPotential + md%Energy%ShadowKinetic
-    Hthermo = sum(thermostat%energy())
+    if ((method > 0).and.(method < 7)) Hthermo = sum(thermostat%energy())
     properties = trim(adjustl(int2str(step))) // " " // trim(rank) // " " // &
                  join(real2str([ Temp, &
                                  Ts, &
@@ -352,19 +355,64 @@ contains
     if ((nts < 1).or.(nts > 2)) call error( "wrong translation/rotation thermostat scheme" )
     single = (nts == 1)
     select case (method)
-      case (0,1,4,6); allocate( nhc_pscaling :: thermostat(nts) )
+      case (0,1,4,6,7,8); allocate( nhc_pscaling :: thermostat(nts) )
       case (2,5); allocate( nhc_boosting :: thermostat(nts) )
       case (3); allocate( nhc_kamberaj :: thermostat(nts) )
       case default; call error( "unknown thermostat method" )
     end select
+    tdamp = ndamp*dt
+    Hthermo = 0.0_rb
     if (method == 5) then
       call thermostat(1) % setup( M, kT, ndamp*dt, (6/nts)*NB-3, 1 )
-      if (nts == 2) call thermostat(2) % setup( M, kT, ndamp*dt, 3*NB, 1 )
+      if (nts == 2) call thermostat(2) % setup( M, kT, tdamp, 3*NB, 1 )
     else
       call thermostat(1) % setup( M, kT, ndamp*dt, (6/nts)*NB-3, nloops )
-      if (nts == 2) call thermostat(2) % setup( M, kT, ndamp*dt, 3*NB, nloops )
+      if (nts == 2) call thermostat(2) % setup( M, kT, tdamp, 3*NB, nloops )
     end if
   end subroutine Setup_Simulation
+  !-------------------------------------------------------------------------------------------------
+  function BussiScale(KE, KE_sp, dof, tau, dt) result( alphaSq )
+    real(rb), intent(in) :: KE, KE_sp, tau, dt
+    integer,  intent(in) :: dof
+    real(rb)             :: alphaSq
+    real(rb) :: R1, x, sumRs, A, B, C
+    R1 = random%normal()
+    if (mod(dof, 2) == 1) then
+      x = (dof - 1)/2
+      sumRs = 2.0*random%gamma(x)
+    else
+      x = (dof - 2)/2
+      sumRs = 2.0*random%gamma(x) + random%normal()**2
+    end if
+    A = exp(-dt/tau)
+    B = 1.0 - A
+    C = KE_sp/(dof*KE)
+    alphaSq = A + C*B*(R1**2 + sumRs) + 2.0*sqrt(C*B*A)*R1
+  end function BussiScale
+  !-------------------------------------------------------------------------------------------------
+  subroutine Bussi_Step
+    real(rb) :: factor
+    factor = BussiScale( md%Energy%Kinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%Kinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+    call EmDee_verlet_step( md, dt )
+    factor = BussiScale( md%Energy%Kinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%Kinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+  end subroutine Bussi_Step
+  !-------------------------------------------------------------------------------------------------
+  subroutine Bussi_Shadow_Step
+    real(rb) :: factor
+    factor = BussiScale( md%Energy%ShadowKinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%ShadowKinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+    call EmDee_verlet_step( md, dt )
+    factor = BussiScale( md%Energy%ShadowKinetic, KE_sp, dof, tdamp, dt_2 )
+    Hthermo = Hthermo + (1.0 - factor)*md%Energy%ShadowKinetic
+    call EmDee_boost( md, zero, -log(factor)/dt, dt_2 )
+    md%Energy%ShadowKinetic = factor*md%Energy%ShadowKinetic
+    md%Energy%ShadowRotational = factor*md%Energy%ShadowRotational
+  end subroutine Bussi_Shadow_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Pscaling_Step
     if (single) then
@@ -584,21 +632,21 @@ contains
 !-----------------------------------------------------------------------------------------------------
   subroutine Separate_Boost_Step
     transOnly
-    call EmDee_boost( md, one, zero, dt_4 ) 
+    call EmDee_boost( md, one, zero, dt_4 )
     rotOnly
     call EmDee_boost( md, one, zero, dt_4 )
     trans_rot
-    call EmDee_displace( md, one, zero, dt_2 )    
+    call EmDee_displace( md, one, zero, dt_2 )
     rotOnly
     call EmDee_boost( md, one, zero, dt_2 )
     transOnly
     call EmDee_boost( md, one, zero, dt_2 )
     trans_rot
-    call EmDee_displace( md, one, zero, dt_2 )    
+    call EmDee_displace( md, one, zero, dt_2 )
     rotOnly
     call EmDee_boost( md, one, zero, dt_4 )
     transOnly
-    call EmDee_boost( md, one, zero, dt_4 )     
+    call EmDee_boost( md, one, zero, dt_4 )
    end subroutine Separate_Boost_Step
 !-----------------------------------------------------------------------------------------------------
   subroutine ComputeTheta
@@ -606,9 +654,9 @@ contains
     real(rb) :: A(3,3)
     ind = 1
     do i = 1, NB
-      do j = 1, NP       
-        mu(:,i) = Config%Charge(ind)*R(:,ind) 
-        ind = ind + 1 
+      do j = 1, NP
+        mu(:,i) = Config%Charge(ind)*R(:,ind)
+        ind = ind + 1
       end do
       A =  matmul(matrix_Bt(q(:,i)),matrix_C(q(:,i)))
       theta(:,i) = matmul(A,mu(:,i))
@@ -619,7 +667,7 @@ contains
     integer ::  i
     real(rb) :: A(3,3)
     do i = 1, NB
-      A =  matmul(matrix_Bt(q(:,i)),matrix_C(q(:,i)))      
+      A =  matmul(matrix_Bt(q(:,i)),matrix_C(q(:,i)))
       mu(:,i) = matmul( transpose(A),theta(:,i) )
     end do
   end subroutine ComputeMu
@@ -652,7 +700,7 @@ contains
      title = trim(title)//" g("//trim(adjustl(Ci))//","//trim(adjustl(Cj))//")"
    end do
    write(unit,'(A)') trim(title)
-     do i = 1, bins 
+     do i = 1, bins
        write(unit,*) (i-0.5)*Rc/bins, gr(i,:)/real(counter,rb)
      end do
  end subroutine rdf_save_to_unit
