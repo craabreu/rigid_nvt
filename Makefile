@@ -1,9 +1,10 @@
 # Compilers and their basic options:
 FORT ?= mpif90
 EXECUTABLE ?= nvt
+EMDEE ?= /usr/local
 
 BASIC_OPTS = -march=native -m64 -fopenmp -cpp -fmax-errors=1
-BASIC_OPTS += -Wall -Wno-maybe-uninitialized -I/scratch/72061a/EmDee/include/
+BASIC_OPTS += -Wall -Wno-maybe-uninitialized -I$(EMDEE)/include
 FAST_OPTS = -Ofast
 DEBUG_OPTS = -g -Og -fcheck=all -Ddebug
 ifeq ($(DEBUG), 1)
@@ -28,7 +29,7 @@ lj: $(EXECUTABLE)_lj
 lj_coul: $(EXECUTABLE)_lj_coul
 
 $(EXECUTABLE)_lj_coul: $(EXECUTABLE).f90 $(LIBFILE) $(SRCS)
-	$(FORT) $(FLAGS) -Dcoul -J$(COMMON) -L$(COMMON) -o $@ $< -l$(LIB) -L/scratch/72061a/EmDee/lib -lemdee
+	$(FORT) $(FLAGS) -Dcoul -J$(COMMON) -L$(COMMON) -o $@ $< -l$(LIB) -L$(EMDEE)/lib -lemdee
 
 $(EXECUTABLE)_lj: $(EXECUTABLE).f90 $(LIBFILE) $(SRCS)
 	$(FORT) $(FLAGS) -J$(COMMON) -L$(COMMON) -o $@ $< -l$(LIB) -lemdee
