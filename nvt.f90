@@ -181,6 +181,7 @@ contains
       case (6); call Pscaling_Shadow_Step
       case (7); call Bussi_Step
       case (8); call Bussi_Shadow_Step
+      case (9); call Embedded_Step
     end select
   end subroutine execute_step
   !-------------------------------------------------------------------------------------------------
@@ -230,7 +231,7 @@ contains
     Ts = (md%Energy%ShadowKinetic/KE_sp)*T
     H = md%Energy%Potential + md%Energy%Kinetic
     Hs = md%Energy%ShadowPotential + md%Energy%ShadowKinetic
-    if ((method > 0).and.(method < 7)) Hthermo = sum(thermostat%energy())
+    if (any([1,2,3,4,5,6,9] == method)) Hthermo = sum(thermostat%energy())
     properties = trim(adjustl(int2str(step))) // " " // &
                  join(real2str([ Temp, &
                                  Ts, &
@@ -343,14 +344,14 @@ contains
     if ((nts < 1).or.(nts > 2)) call error( "wrong translation/rotation thermostat scheme" )
     single = (nts == 1)
     select case (method)
-      case (0,1,4,6,7,8); allocate( nhc_pscaling :: thermostat(nts) )
+      case (0,1,4,6,7,8,9); allocate( nhc_pscaling :: thermostat(nts) )
       case (2,5); allocate( nhc_boosting :: thermostat(nts) )
       case (3); allocate( nhc_kamberaj :: thermostat(nts) )
       case default; call error( "unknown thermostat method" )
     end select
     tdamp = ndamp*dt
     Hthermo = 0.0_rb
-    if (method == 5) then
+    if ((method == 5).or.(method == 9)) then ! New Hybrid or Embedded
       call thermostat(1) % setup( M, kT, ndamp*dt, (6/nts)*NB-3, 1 )
       if (nts == 2) call thermostat(2) % setup( M, kT, tdamp, 3*NB, 1 )
     else
@@ -358,6 +359,31 @@ contains
       if (nts == 2) call thermostat(2) % setup( M, kT, tdamp, 3*NB, nloops )
     end if
   end subroutine Setup_Simulation
+  !-------------------------------------------------------------------------------------------------
+  subroutine Embedded_Step
+      integer :: i
+      real(rb) :: smalldt, smalldt_2
+      smalldt = dt/nloops
+      smalldt_2 = half*smalldt
+      if (single) then
+          call EmDee_boost( md, one, zero, dt_2 )
+          call thermostat(1) % integrate( smalldt_2, two*md%Energy%Kinetic )
+          call EmDee_boost( md, zero, thermostat(1)%damping, smalldt_2 )
+          md%Options%AutoForceCompute = .false.
+          do i = 1, nloops-1
+              call EmDee_displace( md, one, zero, smalldt )
+              call thermostat(1) % integrate( smalldt, two*md%Energy%Kinetic )
+              call EmDee_boost( md, zero, thermostat(1)%damping, smalldt )
+          end do
+          md%Options%AutoForceCompute = .true.
+          call EmDee_displace( md, one, zero, smalldt )
+          call thermostat(1) % integrate( smalldt_2, two*md%Energy%Kinetic )
+          call EmDee_boost( md, zero, thermostat(1)%damping, smalldt_2 )
+          call EmDee_boost( md, one, zero, dt_2 )
+      else
+          call error("Double embedded thermostat not implemented")
+      end if
+  end subroutine Embedded_Step
   !-------------------------------------------------------------------------------------------------
   function BussiScale(KE, KE_sp, dof, tau, dt) result( alphaSq )
     real(rb), intent(in) :: KE, KE_sp, tau, dt
@@ -443,7 +469,7 @@ contains
       md%Energy%ShadowKinetic = factor*md%Energy%ShadowKinetic
       md%Energy%ShadowRotational = factor*md%Energy%ShadowRotational
     else
-      stop "P-scaling shadow only admits single thermostat"
+      call error("P-scaling shadow only admits single thermostat")
     end if
   end subroutine Pscaling_Shadow_Step
   !-------------------------------------------------------------------------------------------------
