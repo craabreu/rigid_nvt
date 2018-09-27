@@ -352,7 +352,7 @@ contains
     end select
     tdamp = ndamp*dt
     Hthermo = 0.0_rb
-    if ((method == 5).or.(method == 9).or.(method == 10)) then ! New Hybrid or Embedded or Intertwined
+    if ((method == 5).or.(method == 10)) then ! New Hybrid or Embedded or Intertwined
       call thermostat(1) % setup( M, kT, ndamp*dt, (6/nts)*NB-3, 1 )
       if (nts == 2) call thermostat(2) % setup( M, kT, tdamp, 3*NB, 1 )
     else
@@ -404,21 +404,11 @@ contains
   end subroutine Intertwined_Step
   !-------------------------------------------------------------------------------------------------
   subroutine Embedded_Step
-      integer :: i
-      real(rb) :: smalldt, smalldt_2
-      smalldt = dt/nloops
-      smalldt_2 = half*smalldt
       if (single) then
           call EmDee_boost( md, one, zero, dt_2 )
-          call integrateThermostat(smalldt_2)
-          md%Options%AutoForceCompute = .false.
-          do i = 1, nloops-1
-              call EmDee_displace( md, one, zero, smalldt )
-              call integrateThermostat(smalldt)
-          end do
-          md%Options%AutoForceCompute = .true.
-          call EmDee_displace( md, one, zero, smalldt )
-          call integrateThermostat(smalldt_2)
+          call thermostat(1) % integrate( dt, two*md%Energy%Kinetic )
+          call EmDee_displace( md, thermostat(1)%meanFactor, zero, dt )
+          call EmDee_boost( md, zero, thermostat(1)%damping, dt )
           call EmDee_boost( md, one, zero, dt_2 )
       else
           call error("Double embedded thermostat not implemented")

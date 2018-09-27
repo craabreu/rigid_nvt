@@ -10,6 +10,7 @@ type, abstract :: nhc
   real(rb), private :: kT                    !> Target temperature in energy units
   real(rb), private :: LKT                   !> kT times the number of degrees of freedom
   real(rb) :: damping
+  real(rb) :: meanFactor
   real(rb), allocatable :: InvQ(:)  !> Inverse of thermostat inertial parameters
   real(rb), allocatable :: eta(:)   !> Thermostat "coordinates"
   real(rb), allocatable :: p(:)     !> Thermostat "momenta"
@@ -93,21 +94,25 @@ contains
     real(rb),            intent(in)    :: timestep, TwoKE
 
     integer :: i, j
-    real(rb) :: dt, dt_2, twodt, alpha, alphaSum
+    real(rb) :: dt, dt_2, twodt, alpha, alphaSum, factor, sumFactor
 
     dt = timestep/me%nloops
     dt_2 = half*dt
     twodt = two*dt
     alphaSum = zero
+    factor = one
+    sumFactor = zero
     do i = 1, me%nloops
       me%p(me%M) = me%p(me%M) + (me%p(me%M-1)**2*me%InvQ(me%M-1) - me%kT)*dt_2
       do j = me%M-1, 2, -1
         call integrate( me, j, me%p(j+1)*me%InvQ(j+1), me%p(j-1)**2*me%InvQ(j-1) - me%kT, dt_2 )
       end do
-      call integrate( me, 1, me%p(2)*me%InvQ(2), exp(-alphaSum*twodt)*twoKE - me%LkT, dt_2 )
+      call integrate( me, 1, me%p(2)*me%InvQ(2), factor**2*twoKE - me%LkT, dt_2 )
       alpha = me%p(1)*me%InvQ(1)
       alphaSum = alphaSum + alpha
-      call integrate( me, 1, me%p(2)*me%InvQ(2), exp(-alphaSum*twodt)*twoKE - me%LkT, dt_2 )
+      factor = exp(-alphaSum*dt)
+      sumFactor = sumFactor + factor
+      call integrate( me, 1, me%p(2)*me%InvQ(2), factor**2*twoKE - me%LkT, dt_2 )
       do j = 2, me%M-1
         call integrate( me, j, me%p(j+1)*me%InvQ(j+1), me%p(j-1)**2*me%InvQ(j-1) - me%kT, dt_2 )
       end do
@@ -115,6 +120,7 @@ contains
     end do
     me%eta(1) = me%eta(1) + alphaSum*dt
     me%damping = alphaSum/me%nloops
+    me%meanFactor = sumFactor/me%nloops
 
     contains
       !- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -202,4 +208,3 @@ contains
   !=================================================================================================
 
 end module mThermostat
-
